@@ -1,0 +1,60 @@
+name: CodeQL
+
+# Reusable CodeQL analysis for Obsidian plugin repos.
+#
+# security-extended query suite across a matrix of languages (default:
+# javascript-typescript + actions).
+#
+# The weekly schedule CANNOT be inherited through workflow_call - `on.schedule`
+# is ignored in a called workflow and only fires from the CALLER's own trigger.
+# The caller therefore declares its own `schedule:` cron (plus push/pull_request)
+# and simply `uses:` this workflow; see templates/caller-workflows/codeql.yml.
+
+on:
+    workflow_call:
+        inputs:
+            languages:
+                description: |
+                    JSON array of CodeQL languages to analyze, passed to the
+                    matrix (e.g. '["javascript-typescript","actions"]').
+                type: string
+                required: false
+                default: '["javascript-typescript","actions"]'
+
+concurrency:
+    group: codeql-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    analyze:
+        name: Analyze (${{ matrix.language }})
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            security-events: write
+            actions: read
+        strategy:
+            fail-fast: false
+            matrix:
+                language: ${{ fromJSON(inputs.languages) }}
+        steps:
+            - name: Harden Runner
+              uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+              with:
+                  egress-policy: audit
+            - name: Checkout
+              uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+            - name: Initialize CodeQL
+              uses: github/codeql-action/init@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4
+              with:
+                  languages: ${{ matrix.language }}
+                  queries: security-extended
+            - name: Perform CodeQL Analysis
+              uses: github/codeql-action/analyze@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4
+              with:
+                  category: "/language:${{ matrix.language }}"

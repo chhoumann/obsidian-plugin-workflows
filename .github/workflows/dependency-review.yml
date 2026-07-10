@@ -1,0 +1,54 @@
+name: Dependency Review
+
+# Reusable dependency review for Obsidian plugin repos.
+#
+# Reviews dependency changes on every PR and blocks newly-introduced advisories
+# before they land. The caller triggers on pull_request with NO path filters, so
+# lockfile bumps (including docs subprojects) are always scanned.
+#
+# The default action only fails on runtime/high; this fails on moderate+ in both
+# runtime AND development scopes.
+
+on:
+    workflow_call:
+        inputs:
+            fail-on-severity:
+                description: "Minimum advisory severity that fails the check (low, moderate, high, critical)."
+                type: string
+                required: false
+                default: moderate
+            fail-on-scopes:
+                description: "Comma-separated dependency scopes to enforce (runtime, development)."
+                type: string
+                required: false
+                default: "runtime, development"
+
+concurrency:
+    group: dep-review-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    dependency-review:
+        name: Dependency Review
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            pull-requests: write
+        steps:
+            - name: Harden Runner
+              uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+              with:
+                  egress-policy: audit
+            - name: Checkout
+              uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+            - name: Dependency Review
+              uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+              with:
+                  comment-summary-in-pr: on-failure
+                  fail-on-severity: ${{ inputs.fail-on-severity }}
+                  fail-on-scopes: ${{ inputs.fail-on-scopes }}
