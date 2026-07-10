@@ -1,0 +1,72 @@
+// Canonical semantic-release configuration for an Obsidian plugin.
+//
+// This is a COPY-IN TEMPLATE, not a workflow. Paste the object below into the
+// "release" key of your package.json (JSON - strip these comments), or drop it
+// in a .releaserc.json. semantic-release itself must be driven by the repo's own
+// release workflow, which stays per-repo (quickadd uses app-token + provenance,
+// podnotes uses a machine-PR pipeline - deliberately out of scope here).
+//
+// Why each piece:
+//   tagFormat "${version}"        Obsidian's community-plugin releaser expects a
+//                                 bare version tag (0.1.2), NOT v0.1.2.
+//   commit-analyzer chore->patch  A `chore:` commit ships a patch release, so
+//                                 dependency bumps and housekeeping still cut a
+//                                 build. Remove this rule if you prefer chores to
+//                                 be release-neutral.
+//   npm publish:false             The plugin is distributed as GitHub release
+//                                 assets, never published to the npm registry.
+//   exec prepareCmd               Runs version-bump.mjs to sync manifest.json +
+//                                 versions.json before the release commit.
+//   git assets                    Commits the version-carrying files back to the
+//                                 branch as `release(version): ...`. Include your
+//                                 lockfile (pnpm-lock.yaml or package-lock.json).
+//   github assets                 Uploads the installable artifacts to the
+//                                 GitHub release. Drop styles.css if the plugin
+//                                 ships no stylesheet.
+{
+  "tagFormat": "${version}",
+  "branches": ["master"],
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "releaseRules": [{ "type": "chore", "release": "patch" }]
+      }
+    ],
+    "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/npm",
+      {
+        "npmPublish": false
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "node version-bump.mjs ${nextRelease.version}"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": [
+          "package.json",
+          "pnpm-lock.yaml",
+          "manifest.json",
+          "versions.json"
+        ],
+        "message": "release(version): Release ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          { "path": "main.js", "label": "main.js" },
+          { "path": "manifest.json", "label": "manifest.json" },
+          { "path": "styles.css", "label": "styles.css" }
+        ]
+      }
+    ]
+  ]
+}
