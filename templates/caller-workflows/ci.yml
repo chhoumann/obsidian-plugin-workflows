@@ -1,0 +1,30 @@
+name: CI
+
+# Caller stub for the reusable CI workflow. Copy to .github/workflows/ci.yml.
+#
+# NO paths-ignore: Test and Build + Lint must run on every PR so they can be
+# required status checks without deadlocking docs-only PRs (a required check that
+# never runs stays pending forever and blocks merge).
+on:
+    push:
+        branches: [master]
+    pull_request:
+        branches: [master]
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    ci:
+        uses: chhoumann/obsidian-plugin-workflows/.github/workflows/ci.yml@v1
+        with:
+            package-manager: pnpm
+            node-version: "24"
+            # Defaults resolve to '<package-manager> run test' and
+            # '<package-manager> run build'. Override only where your scripts differ.
+            build-command: pnpm run build
+            lint-command: pnpm run lint
+            # One command per line. Example extra checks:
+            check-commands: |
+                pnpm run check
