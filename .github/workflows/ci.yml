@@ -1,0 +1,157 @@
+name: CI
+
+# Reusable CI for Obsidian plugin repos (quickadd, metaedit, podnotes).
+#
+# Two jobs - Test and Build + Lint - mirror the per-repo hardened set:
+# harden-runner egress audit, SHA-pinned actions, checkout with
+# persist-credentials:false, frozen-lockfile install, least-privilege perms.
+#
+# No paths-ignore on the CALLER side: Test and Build + Lint must run on every
+# PR so they can be required status checks without deadlocking docs-only /
+# markdown-only PRs. A required check that never runs stays pending forever and
+# blocks merge. The caller wires push/pull_request triggers with NO path filters;
+# see templates/caller-workflows/ci.yml.
+#
+# Package-manager-dependent defaults (test/build commands, install command) are
+# resolved at runtime because workflow_call input defaults cannot reference other
+# inputs.
+
+on:
+    workflow_call:
+        inputs:
+            package-manager:
+                description: "Package manager: pnpm or npm."
+                type: string
+                required: false
+                default: pnpm
+            node-version:
+                description: "Node.js version passed to actions/setup-node."
+                type: string
+                required: false
+                default: "24"
+            test-command:
+                description: "Test command. Defaults to '<package-manager> run test'."
+                type: string
+                required: false
+                default: ""
+            build-command:
+                description: "Build command. Defaults to '<package-manager> run build'."
+                type: string
+                required: false
+                default: ""
+            lint-command:
+                description: "Optional lint command run after build. Skipped when empty."
+                type: string
+                required: false
+                default: ""
+            check-commands:
+                description: |
+                    Optional additional checks run after build/lint, one command
+                    per line (e.g. a Svelte check, a format check, a type check).
+                    Skipped when empty.
+                type: string
+                required: false
+                default: ""
+
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    test:
+        name: Test
+        runs-on: ubuntu-latest
+        steps:
+            - name: Harden Runner
+              uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+              with:
+                  egress-policy: audit
+            - name: Checkout
+              uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+            - name: Setup pnpm
+              if: inputs.package-manager == 'pnpm'
+              uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+            - name: Use Node.js ${{ inputs.node-version }}
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  check-latest: true
+                  cache: ${{ inputs.package-manager }}
+            - name: Install dependencies
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+              run: |
+                  if [ "$PACKAGE_MANAGER" = "npm" ]; then
+                      npm ci
+                  else
+                      pnpm install --frozen-lockfile
+                  fi
+            - name: Run tests
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  TEST_COMMAND: ${{ inputs.test-command }}
+              run: |
+                  CMD="${TEST_COMMAND:-$PACKAGE_MANAGER run test}"
+                  echo "Running: $CMD"
+                  eval "$CMD"
+
+    build-lint:
+        name: Build + Lint
+        runs-on: ubuntu-latest
+        steps:
+            - name: Harden Runner
+              uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+              with:
+                  egress-policy: audit
+            - name: Checkout
+              uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+            - name: Setup pnpm
+              if: inputs.package-manager == 'pnpm'
+              uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+            - name: Use Node.js ${{ inputs.node-version }}
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  check-latest: true
+                  cache: ${{ inputs.package-manager }}
+            - name: Install dependencies
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+              run: |
+                  if [ "$PACKAGE_MANAGER" = "npm" ]; then
+                      npm ci
+                  else
+                      pnpm install --frozen-lockfile
+                  fi
+            - name: Build
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: |
+                  CMD="${BUILD_COMMAND:-$PACKAGE_MANAGER run build}"
+                  echo "Running: $CMD"
+                  eval "$CMD"
+            - name: Lint
+              if: inputs.lint-command != ''
+              env:
+                  LINT_COMMAND: ${{ inputs.lint-command }}
+              run: |
+                  echo "Running: $LINT_COMMAND"
+                  eval "$LINT_COMMAND"
+            - name: Additional checks
+              if: inputs.check-commands != ''
+              env:
+                  CHECK_COMMANDS: ${{ inputs.check-commands }}
+              run: |
+                  printf '%s\n' "$CHECK_COMMANDS" | while IFS= read -r cmd; do
+                      [ -z "$cmd" ] && continue
+                      echo "Running: $cmd"
+                      eval "$cmd"
+                  done
