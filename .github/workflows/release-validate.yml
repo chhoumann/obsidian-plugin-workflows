@@ -323,13 +323,6 @@ jobs:
                       if (existingTagSha && existingTagSha !== releaseSha) {
                         throw new Error(`Tag ${version} points to ${existingTagSha}, expected ${releaseSha}.`);
                       }
-                      // A verified existing tag is the most durable exact release source:
-                      // stage 3 accepts refs/tags/<version> directly, so the recovery
-                      // branch is only needed before the tag exists. This also keeps
-                      // re-validation of an already-tagged release write-free, which
-                      // matters on repos where the Actions token cannot create refs at
-                      // older commits whose workflow files differ from the branch head.
-                      const tagExists = existingTagSha === releaseSha;
 
                       const prInput = {
                         baseRef: pull.base.ref,
@@ -348,7 +341,6 @@ jobs:
                       core.setOutput('version', version);
                       core.setOutput('release-sha', releaseSha);
                       core.setOutput('pr-number', String(pullNumber));
-                      core.setOutput('tag-exists', String(tagExists));
 
             - name: Validate version-file contract
               env:
@@ -373,7 +365,8 @@ jobs:
                   PR_NUMBER: ${{ steps.forensics.outputs.pr-number }}
                   PLUGIN_NAME: ${{ inputs.plugin-name }}
                   RELEASE_WORKFLOW: ${{ inputs.release-workflow }}
-                  TAG_EXISTS: ${{ steps.forensics.outputs.tag-exists }}
+                  EVENT_NAME: ${{ github.event_name }}
+                  DEFAULT_BRANCH: ${{ inputs.default-branch }}
               with:
                   script: |
                       // Bounded retry for read-only calls; writes are never retried.
@@ -404,8 +397,19 @@ jobs:
                       }
                       const { owner, repo } = context.repo;
 
-                      let dispatchRef = version;
-                      if (process.env.TAG_EXISTS !== 'true') {
+                      // The merge event pins the exact release source on a durable
+                      // release-run/<version> branch and dispatches there, so a failed
+                      // release stage can always be replayed at the exact commit. A
+                      // workflow_dispatch recovery instead dispatches on the current
+                      // default branch: the release stage then runs the consumer's
+                      // CURRENT caller stub and toolkit pins - which is what makes
+                      // "bump the pins, then recover" actually pick up the fix - and its
+                      // trusted-branch-recovery source check re-derives and re-verifies
+                      // the exact release commit, so this stays fail-closed. It also
+                      // performs no ref writes, which some repos' Actions tokens reject
+                      // for older commits whose workflow files differ from the head.
+                      let dispatchRef = process.env.DEFAULT_BRANCH;
+                      if (process.env.EVENT_NAME !== 'workflow_dispatch') {
                         // git cannot hold refs/heads/release-run and refs/heads/release-run/*
                         // at once, so a stale branch literally named "release-run" makes the
                         // recovery-branch createRef fail with an opaque 422. Preflight it into
