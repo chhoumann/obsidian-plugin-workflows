@@ -290,12 +290,14 @@ workflow state.
   `pull_request_target` closed-event delivery for the release PR. The payload
   carries the merge-time SHA, while the workflow file still resolves from the
   current default branch.
-- **The release stage alone failed:** the `release-run/<version>` recovery
-  branch pins the exact release SHA until a verified publish; dispatch the
-  consumer's **Release** workflow on it with the same PR number, or simply
-  re-dispatch **Trigger release** as above (it recreates the recovery branch
-  and dispatch). Re-running an already-published version is safe: the publisher
-  verifies the existing release byte-for-byte and finishes without mutating it.
+- **The release stage alone failed:** validate dispatches from the most durable
+  exact source it has - the `<version>` tag once it exists, else a
+  `release-run/<version>` recovery branch pinning the exact release SHA until a
+  verified publish. Dispatch the consumer's **Release** workflow on that ref
+  with the same PR number, or simply re-dispatch **Trigger release** as above
+  (it re-derives the source and dispatches). Re-running an already-published
+  version is safe: the publisher verifies the existing release byte-for-byte
+  and finishes without mutating it.
 
 ### Migration checklist (release pipeline)
 
