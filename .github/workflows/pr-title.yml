@@ -33,6 +33,7 @@ on:
                     ci
                     chore
                     revert
+                    release
 
 permissions:
     pull-requests: read
