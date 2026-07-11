@@ -399,6 +399,22 @@ jobs:
                       if (branchHead.data.object.sha !== baseSha) {
                         throw new Error(`${defaultBranch} moved from ${baseSha} to ${branchHead.data.object.sha}; rerun release planning.`);
                       }
+                      // git cannot hold refs/heads/release and refs/heads/release/* at once, so
+                      // a stale branch literally named "release" makes createRef for every
+                      // release/<version> branch fail with an opaque 422 "Reference update
+                      // failed". Preflight the namespace into an actionable error instead.
+                      const releaseNamespace = await github.paginate(github.rest.git.listMatchingRefs, {
+                        owner,
+                        repo,
+                        ref: 'heads/release',
+                        per_page: 100,
+                      });
+                      if (releaseNamespace.some((reference) => reference.ref === 'refs/heads/release')) {
+                        throw new Error(
+                          "A branch named 'release' exists and blocks creation of release/<version> " +
+                          'branches. Delete or rename that branch, then rerun release preparation.',
+                        );
+                      }
                       const baseCommit = await github.rest.git.getCommit({ owner, repo, commit_sha: baseSha });
                       const treeItems = [];
                       for (const file of fileEntries) {
