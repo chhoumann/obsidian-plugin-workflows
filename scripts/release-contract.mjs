@@ -82,6 +82,36 @@ export function assertMinAppVersion(value, label) {
 }
 
 /**
+ * @param {Record<string, unknown>} versions
+ * @param {string} version
+ * @param {string} label
+ */
+function recordedMinAppVersion(versions, version, label) {
+	const value = versions[version];
+	if (typeof value !== "string" || !value) {
+		throw new Error(`${label} versions.json does not record ${version}.`);
+	}
+	return assertMinAppVersion(value, `${label} recorded`);
+}
+
+/**
+ * A commit on the default branch may raise manifest.minAppVersion ahead of the
+ * next release; versions.json records the new floor only when that release
+ * materializes. The manifest floor must therefore equal the recorded floor or
+ * exceed it - it may never fall below what was already published.
+ * @param {string} recorded
+ * @param {string} manifest
+ * @param {string} label
+ */
+export function assertPendingMinAppVersion(recorded, manifest, label) {
+	if (manifest !== recorded && compareVersions(manifest, recorded) <= 0) {
+		throw new Error(
+			`${label} minAppVersion must increase from the released compatibility floor.`,
+		);
+	}
+}
+
+/**
  * @param {string} root
  * @param {string} fileName
  * @param {ReturnType<typeof resolveReleaseConfig>} config
@@ -194,13 +224,10 @@ export function validateCurrentVersionFiles(root, config) {
 	const versions = readJson(root, "versions.json", config);
 	const packageLock = config.lockfile ? readJson(root, config.lockfile, config) : null;
 	const version = assertSynchronizedVersion(packageJson, packageLock, manifest, config, "current");
-	if (typeof manifest.minAppVersion !== "string" || !manifest.minAppVersion) {
-		throw new Error("manifest.json minAppVersion must be a non-empty string.");
-	}
-	if (versions[version] !== manifest.minAppVersion) {
-		throw new Error("versions.json does not record the current manifest version.");
-	}
-	return { minAppVersion: manifest.minAppVersion, version };
+	const manifestMinAppVersion = assertMinAppVersion(manifest.minAppVersion, "current manifest");
+	const recorded = recordedMinAppVersion(versions, version, "Current");
+	assertPendingMinAppVersion(recorded, manifestMinAppVersion, "Current");
+	return { minAppVersion: manifestMinAppVersion, version };
 }
 
 /**
@@ -239,16 +266,14 @@ export function materializeVersionFiles(options) {
 	if (compareVersions(version, currentVersion) <= 0) {
 		throw new Error(`Release version ${version} must be newer than ${currentVersion}.`);
 	}
-	if (versions[currentVersion] !== manifest.minAppVersion) {
-		throw new Error(
-			"versions.json version history is not synchronized with the current manifest.",
-		);
-	}
+	const sourceMinAppVersion = assertMinAppVersion(manifest.minAppVersion, "source manifest");
+	assertPendingMinAppVersion(
+		recordedMinAppVersion(versions, currentVersion, "Source"),
+		sourceMinAppVersion,
+		"Source",
+	);
 	if (Object.prototype.hasOwnProperty.call(versions, version)) {
 		throw new Error(`versions.json already contains ${version}.`);
-	}
-	if (typeof manifest.minAppVersion !== "string" || !manifest.minAppVersion) {
-		throw new Error("manifest.json minAppVersion must be a non-empty string.");
 	}
 
 	packageJson.version = version;
@@ -325,9 +350,11 @@ export function validateVersionFiles(options) {
 			`Release minAppVersion ${nextMinAppVersion} must not be lower than base ${baseMinAppVersion}.`,
 		);
 	}
-	if (baseVersions[baseVersion] !== baseManifest.minAppVersion) {
-		throw new Error("Base versions.json is not synchronized with its manifest.");
-	}
+	assertPendingMinAppVersion(
+		recordedMinAppVersion(baseVersions, baseVersion, "Base"),
+		baseMinAppVersion,
+		"Base",
+	);
 	if (nextPackage.version !== version) {
 		throw new Error(`Candidate version is ${String(nextPackage.version)}, expected ${version}.`);
 	}
