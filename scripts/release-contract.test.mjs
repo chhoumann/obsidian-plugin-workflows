@@ -91,7 +91,7 @@ for (const config of [npmConfig, pnpmConfig]) {
 				version: "2.17.3",
 			});
 
-			await writeJson(path.join(root, "versions.json"), { "2.17.3": "0.9.0" });
+			await writeJson(path.join(root, "versions.json"), { "2.17.2": "0.9.0" });
 			assert.throws(() => validateCurrentVersionFiles(root, config), /does not record/);
 		});
 
@@ -167,11 +167,11 @@ for (const config of [npmConfig, pnpmConfig]) {
 				/must be newer/,
 			);
 
-			await writeJson(path.join(root, "versions.json"), { "2.17.3": "0.9.0" });
+			await writeJson(path.join(root, "versions.json"), { "2.17.3": "2.0.0" });
 			const historyOut = await makeTempRoot("release-bad-history");
 			assert.throws(
 				() => materializeVersionFiles({ baseSha: BASE_SHA, config, out: historyOut, root, version: "2.17.4" }),
-				/version history/,
+				/must increase/,
 			);
 		});
 
@@ -258,6 +258,52 @@ describe("minAppVersion floor", () => {
 		assert.throws(
 			() => validateVersionFiles({ baseRoot: root, candidateRoot: out, config: npmConfig, version: "2.17.4" }),
 			/stable semantic version/,
+		);
+	});
+});
+
+describe("pending minAppVersion floor", () => {
+	async function writePendingFixture(root) {
+		await writeVersionFixture(root, npmConfig);
+		const manifest = JSON.parse(await fs.readFile(path.join(root, "manifest.json"), "utf8"));
+		manifest.minAppVersion = "1.1.0";
+		await writeJson(path.join(root, "manifest.json"), manifest);
+	}
+
+	it("accepts a manifest floor raised ahead of the next release", async () => {
+		const root = await makeTempRoot("pending-current");
+		await writePendingFixture(root);
+		assert.deepEqual(validateCurrentVersionFiles(root, npmConfig), {
+			minAppVersion: "1.1.0",
+			version: "2.17.3",
+		});
+	});
+
+	it("materializes the pending floor into the new release entry", async () => {
+		const root = await makeTempRoot("pending-source");
+		const out = await makeTempRoot("pending-output");
+		await writePendingFixture(root);
+		materializeVersionFiles({ baseSha: BASE_SHA, config: npmConfig, out, root, version: "2.17.4" });
+		const versions = JSON.parse(await fs.readFile(path.join(out, "versions.json"), "utf8"));
+		assert.equal(versions["2.17.4"], "1.1.0");
+		assert.equal(versions["2.17.3"], "1.0.0");
+		assert.deepEqual(
+			validateVersionFiles({ baseRoot: root, candidateRoot: out, config: npmConfig, version: "2.17.4" }),
+			{ version: "2.17.4" },
+		);
+	});
+
+	it("rejects a manifest floor below the released record", async () => {
+		const root = await makeTempRoot("pending-lowered");
+		await writeVersionFixture(root, npmConfig);
+		const manifest = JSON.parse(await fs.readFile(path.join(root, "manifest.json"), "utf8"));
+		manifest.minAppVersion = "0.9.0";
+		await writeJson(path.join(root, "manifest.json"), manifest);
+		assert.throws(() => validateCurrentVersionFiles(root, npmConfig), /must increase/);
+		const out = await makeTempRoot("pending-lowered-out");
+		assert.throws(
+			() => materializeVersionFiles({ baseSha: BASE_SHA, config: npmConfig, out, root, version: "2.17.4" }),
+			/must increase/,
 		);
 	});
 });

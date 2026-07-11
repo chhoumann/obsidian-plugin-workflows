@@ -281,8 +281,18 @@ jobs:
                           typeof next.manifest.minAppVersion !== 'string' || !next.manifest.minAppVersion) {
                         throw new Error('Manifest compatibility versions must be non-empty strings.');
                       }
-                      if (base.versions[baseVersion] !== base.manifest.minAppVersion ||
-                          next.versions[nextVersion] !== next.manifest.minAppVersion) {
+                      const baseRecordedFloor = base.versions[baseVersion];
+                      if (typeof baseRecordedFloor !== 'string' || !baseRecordedFloor) {
+                        throw new Error(`Base versions.json does not record ${baseVersion}.`);
+                      }
+                      // The base manifest floor may run ahead of the recorded floor: a commit on
+                      // the default branch may raise minAppVersion before the release that
+                      // materializes it into versions.json. It may never fall below it.
+                      if (base.manifest.minAppVersion !== baseRecordedFloor &&
+                          compareVersions(base.manifest.minAppVersion, baseRecordedFloor) <= 0) {
+                        throw new Error('Base minAppVersion must increase from the released compatibility floor.');
+                      }
+                      if (next.versions[nextVersion] !== next.manifest.minAppVersion) {
                         throw new Error('Release version history does not match manifest compatibility.');
                       }
                       if (!equalExceptField(next.packageJson, base.packageJson, 'version')) {
