@@ -283,21 +283,23 @@ workflow state.
   default branch (Actions -> Trigger release -> Run workflow) with the merged
   release PR number. Validate re-derives everything from the PR, accepts the
   dispatch only from the current default-branch head, and fails closed on a bad
-  number. Note the run executes the stub and pins currently on the default
-  branch - bump those first if the fix lives here.
-- **Webhook redelivery** is the alternative when you want the validation to run
-  with the exact merge-time event identity: redeliver the original
-  `pull_request_target` closed-event delivery for the release PR. The payload
-  carries the merge-time SHA, while the workflow file still resolves from the
-  current default branch.
-- **The release stage alone failed:** validate dispatches from the most durable
-  exact source it has - the `<version>` tag once it exists, else a
-  `release-run/<version>` recovery branch pinning the exact release SHA until a
-  verified publish. Dispatch the consumer's **Release** workflow on that ref
-  with the same PR number, or simply re-dispatch **Trigger release** as above
-  (it re-derives the source and dispatches). Re-running an already-published
-  version is safe: the publisher verifies the existing release byte-for-byte
-  and finishes without mutating it.
+  number. The whole recovered pipeline - validate and the release stage it
+  dispatches on the default branch - runs the stubs and pins **currently on the
+  default branch**, so bump those first if the fix lives here; the release
+  stage's trusted-branch-recovery check re-derives and re-verifies the exact
+  release commit from the PR.
+- **Webhook redelivery** is the alternative when you want the run to carry the
+  exact merge-time event identity: redeliver the original `pull_request_target`
+  closed-event delivery for the release PR. The payload carries the merge-time
+  SHA, and validate then dispatches the release stage on the exact
+  `release-run/<version>` source, as on a fresh merge.
+- **The release stage alone failed:** the `release-run/<version>` recovery
+  branch pins the exact release SHA until a verified publish; dispatch the
+  consumer's **Release** workflow on it (or on the current default branch, to
+  pick up newer pins) with the same PR number - or simply re-dispatch **Trigger
+  release** as above. Re-running an already-published version is safe: the
+  publisher verifies the existing release byte-for-byte and finishes without
+  mutating it.
 
 ### Migration checklist (release pipeline)
 
