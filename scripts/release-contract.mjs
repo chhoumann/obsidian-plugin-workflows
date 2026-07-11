@@ -450,6 +450,69 @@ export function validateReleasePr(input, config) {
 }
 
 /**
+ * Composes the full merged-release validation for the forensic validate stage
+ * (stage 2): PR shape, release version-file diff, and previous-tag history.
+ * The workflow downloads the version files at the base, release, and previous
+ * tag commits into three roots; this function is the single semantic model so
+ * the inline workflow JS cannot drift from the contract.
+ * @param {{ prInput: unknown; baseRoot: string; candidateRoot: string; previousRoot: string; packageName: string; manifestId: string; config: ReturnType<typeof resolveReleaseConfig> }} options
+ */
+export function validateMergedRelease(options) {
+	const config = options.config;
+	const { version } = validateReleasePr(options.prInput, config);
+	const basePackage = readJson(options.baseRoot, "package.json", config);
+	const baseManifest = readJson(options.baseRoot, "manifest.json", config);
+	const baseLock = config.lockfile ? readJson(options.baseRoot, config.lockfile, config) : null;
+	if (basePackage.name !== options.packageName) {
+		throw new Error(`Base package.json name must be ${options.packageName}.`);
+	}
+	if (baseManifest.id !== options.manifestId) {
+		throw new Error(`Base manifest.json id must be ${options.manifestId}.`);
+	}
+	validateVersionFiles({
+		baseRoot: options.baseRoot,
+		candidateRoot: options.candidateRoot,
+		config,
+		version,
+	});
+	const previousPackage = readJson(options.previousRoot, "package.json", config);
+	const previousManifest = readJson(options.previousRoot, "manifest.json", config);
+	const previousVersions = readJson(options.previousRoot, "versions.json", config);
+	const previousLock = config.lockfile
+		? readJson(options.previousRoot, config.lockfile, config)
+		: null;
+	if (previousPackage.name !== options.packageName) {
+		throw new Error(`Previous tag package.json name must be ${options.packageName}.`);
+	}
+	if (previousManifest.id !== options.manifestId) {
+		throw new Error(`Previous tag manifest.json id must be ${options.manifestId}.`);
+	}
+	const baseVersion = assertSynchronizedVersion(basePackage, baseLock, baseManifest, config, "base");
+	const previousVersion = assertSynchronizedVersion(
+		previousPackage,
+		previousLock,
+		previousManifest,
+		config,
+		"previous tag",
+	);
+	if (previousVersion !== baseVersion) {
+		throw new Error(`Previous tag version ${previousVersion} does not match base ${baseVersion}.`);
+	}
+	if (
+		recordedMinAppVersion(previousVersions, previousVersion, "Previous tag") !==
+		assertMinAppVersion(previousManifest.minAppVersion, "previous tag")
+	) {
+		throw new Error("Previous tag versions.json does not match its manifest minAppVersion.");
+	}
+	validatePreviousTagHistory({
+		baseRoot: options.baseRoot,
+		config,
+		previousRoot: options.previousRoot,
+	});
+	return { baseVersion, version };
+}
+
+/**
  * @param {{ root: string; artifacts: string[]; output?: string; config: ReturnType<typeof resolveReleaseConfig> }} options
  */
 export function createArtifactManifest(options) {
@@ -533,6 +596,17 @@ async function main() {
 	} else if (command === "validate-pr") {
 		const input = JSON.parse(readRegularFile(requiredOption(options, "input")).toString("utf8"));
 		result = validateReleasePr(input, configFromOptions(options));
+	} else if (command === "validate-release") {
+		const input = JSON.parse(readRegularFile(requiredOption(options, "input")).toString("utf8"));
+		result = validateMergedRelease({
+			baseRoot: requiredOption(options, "base-root"),
+			candidateRoot: requiredOption(options, "candidate-root"),
+			config: configFromOptions(options),
+			manifestId: requiredOption(options, "manifest-id"),
+			packageName: requiredOption(options, "package-name"),
+			previousRoot: requiredOption(options, "previous-root"),
+			prInput: input,
+		});
 	} else if (command === "manifest") {
 		result = createArtifactManifest({
 			artifacts: requiredOption(options, "artifacts").split(","),

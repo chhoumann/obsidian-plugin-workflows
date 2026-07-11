@@ -154,12 +154,12 @@ trigger + `uses:`; all logic lives in the reusables here.
 | Reusable | Called from stub triggered by | Consumer stub |
 | --- | --- | --- |
 | `release-prepare.yml` | `workflow_run` (CI completed) + `workflow_dispatch` escape hatch | `release-prepare.yml` |
-| `release-validate.yml` | `pull_request_target: [closed]` | `release-trigger.yml` |
+| `release-validate.yml` | `pull_request_target: [closed]` + `workflow_dispatch` recovery | `release-trigger.yml` |
 | `release.yml` | `workflow_dispatch` (dispatched by validate) | `release.yml` |
 
 A caller stub sets the token ceiling with a top-level or per-job `permissions:`
 that grants the union its reusable needs; the reusable scopes each job down from
-there. Copy the stubs, pin `@v2`, and set `workflows-ref: v2` to match the pin.
+there. Copy the stubs, pin `@v3`, and set `workflows-ref: v3` to match the pin.
 
 ### Inputs
 
@@ -173,16 +173,29 @@ Shared across all three reusables:
 | `default-branch` | `master` | Branch release PRs target. |
 | `package-manager` | `npm` | `npm` or `pnpm`; drives the release-file set (npm syncs `package-lock.json`, pnpm has no lockfile in the set). |
 | `release-bot-app-slug` | (required) | App slug; the expected bot login is `<slug>[bot]`. |
-| `workflows-repository` / `workflows-ref` | `chhoumann/obsidian-plugin-workflows` / `v2` | Where and at what ref the release toolkit scripts are checked out. |
+| `workflows-repository` / `workflows-ref` | `chhoumann/obsidian-plugin-workflows` / `v3` | Where and at what ref the release toolkit scripts are checked out. |
 
 `release-prepare.yml` adds: `target-sha` (empty = default-branch head),
-`node-version`, `app-id` (a repo **variable** value), the `release-app-private-key`
-**secret**, and `dry-run`. `release-validate.yml` adds: `pr-number`,
-`release-merger-login` (empty = repo owner), and `release-workflow` (the consumer
-workflow to dispatch). `release.yml` adds: `release-pr`, `node-version`,
-`release-assets` (JSON list), `build-command`, `verify-commands` (multiline),
-`setup-python` / `python-version` / `docs-requirements`, `notify-name`, and the
-optional `slack-webhook` / `discord-webhook` secrets.
+`node-version`, `release-policy` (below), `app-id` (a repo **variable** value),
+the `release-app-private-key` **secret**, and `dry-run`. `release-validate.yml`
+adds: `pr-number`, `release-merger-login` (empty = repo owner), and
+`release-workflow` (the consumer workflow to dispatch). `release.yml` adds:
+`release-pr`, `node-version`, `release-policy`, `release-assets` (JSON list),
+`build-command`, `verify-commands` (multiline), `setup-python` /
+`python-version` / `docs-requirements`, `notify-name`, and the optional
+`slack-webhook` / `discord-webhook` secrets.
+
+**`release-policy`** is the commit-to-release classification: a JSON list of
+semantic-release `releaseRules` (e.g.
+`[{"scope":"deps","type":"build","release":"patch"}]`) applied on top of the
+standard conventional-commit rules (`feat` -> minor, `fix`/`perf` -> patch,
+breaking -> major). Pin it explicitly in both the `release-prepare.yml` and
+`release.yml` stubs, with the same value, so a toolkit ref bump can never change
+which commits cut a release; an empty value falls back to the toolkit default
+(kept for compatibility). The policy only decides the version bump - notes and
+the release diff are policy-independent - so a prepare/release mismatch either
+produces the identical release or fails closed on the release stage's
+expected-version recompute.
 
 ### Security model - what each forensic check defends against
 
@@ -212,6 +225,13 @@ otherwise. The layered checks:
 - **Attestation + post-publish verification** - `attest-build-provenance` signs the
   assets; publish runs `gh attestation verify` against the exact source digest, then
   downloads every remote asset and re-hashes it. Blocks tampered or swapped assets.
+
+The version-file semantics themselves (synchronized versions, floor rules
+including the pending `minAppVersion` raise, append-only history) live only in
+`scripts/release-contract.mjs`: validate downloads the version files at the
+base, release, and previous-tag commits and runs the pinned contract script
+(`validate-release`), the same model prepare and the release stage use, so the
+workflows cannot drift from the contract.
 
 The read-only forensic API calls in validate and resolve are wrapped in a bounded
 retry (up to four attempts on a transient 5xx) so a momentary API outage cannot
@@ -253,6 +273,30 @@ nothing is pushed and no App call is made (dummy `app-id` / slug are fine for a
 pure planning check). Confirm the planned version and notes look right, then remove
 the dry-run.
 
+### Recovery
+
+Every stage is replayable from durable identities; nothing depends on transient
+workflow state.
+
+- **A release run failed after the PR merged** (or a validation bug was fixed in
+  a newer toolkit pin): re-dispatch the **Trigger release** workflow from the
+  default branch (Actions -> Trigger release -> Run workflow) with the merged
+  release PR number. Validate re-derives everything from the PR, accepts the
+  dispatch only from the current default-branch head, and fails closed on a bad
+  number. Note the run executes the stub and pins currently on the default
+  branch - bump those first if the fix lives here.
+- **Webhook redelivery** is the alternative when you want the validation to run
+  with the exact merge-time event identity: redeliver the original
+  `pull_request_target` closed-event delivery for the release PR. The payload
+  carries the merge-time SHA, while the workflow file still resolves from the
+  current default branch.
+- **The release stage alone failed:** the `release-run/<version>` recovery
+  branch pins the exact release SHA until a verified publish; dispatch the
+  consumer's **Release** workflow on it with the same PR number, or simply
+  re-dispatch **Trigger release** as above (it recreates the recovery branch
+  and dispatch). Re-running an already-published version is safe: the publisher
+  verifies the existing release byte-for-byte and finishes without mutating it.
+
 ### Migration checklist (release pipeline)
 
 1. Ensure the current released version is tagged and has a published GitHub release
@@ -263,19 +307,23 @@ the dry-run.
    [`templates/caller-workflows/`](./templates/caller-workflows)
    (`release-prepare.yml`, `release-trigger.yml`, `release.yml`) into
    `.github/workflows/`. Set `plugin-name` (lowercase, `[a-z0-9-]+`),
-   `package-manager`, `default-branch`, `node-version`, `release-bot-app-slug`,
-   `release-assets` (add `styles.css` if the plugin ships one), and
-   `verify-commands` to match the repo's scripts.
-   - **Two pins move together:** the `uses: ...@v2` ref and the `workflows-ref`
-     input on `release-prepare.yml` / `release.yml` both select this repo's
-     version - bump them in lockstep (Dependabot bumps the `uses:` pin; update
-     `workflows-ref` to match). `release-trigger.yml` has no `workflows-ref` (it
-     is pure API forensics, no toolkit checkout).
+   `package-manager`, `release-policy`, `default-branch`, `node-version`,
+   `release-bot-app-slug`, `release-assets` (add `styles.css` if the plugin
+   ships one), and `verify-commands` to match the repo's scripts.
+   - **Two pins move together:** the `uses: ...@v3` ref and the `workflows-ref`
+     input on all three stubs both select this repo's version - bump them in
+     lockstep (Dependabot bumps the `uses:` pin; update `workflows-ref` to
+     match).
    - **If the default branch is not `master`,** the literal appears in **five
      places** across the three stubs: the `default-branch:` input in all three,
      plus the `if:` gate in `release-prepare.yml` (`head_branch == 'master'`) and
      in `release-trigger.yml` (`base.ref == 'master'`). Change all five.
-4. Retire the repo's old release workflow(s).
+4. Retire the repo's old release workflow(s), and make sure no branch is
+   literally named `release` or `release-run` (old semantic-release setups often
+   have a stray `release` branch): git cannot hold both `refs/heads/release` and
+   `refs/heads/release/<version>`, so a stray branch blocks the pipeline's
+   branch creation. Prepare and validate preflight this and fail with an
+   actionable message, but deleting the stray up front saves a failed run.
 5. Smoke-test with `dry-run: true`, then push a conventional commit to the default
    branch and merge the release PR the bot opens.
 

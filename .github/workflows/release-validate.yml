@@ -1,11 +1,16 @@
 name: Reusable release validate
 
 # Stage 2 of the forensic PR-to-release pipeline. Invoked from the consumer's
-# pull_request_target caller stub the instant a release PR merges. It performs
-# the full merged-PR forensics against the GitHub API (it never checks out PR
-# head code), pins the exact release commit on a durable release-run/<version>
-# recovery branch, and dispatches the release workflow. The pull_request_target
-# trigger itself cannot be workflow_call, so it stays in the caller stub.
+# pull_request_target caller stub the instant a release PR merges (or from a
+# workflow_dispatch recovery on the default branch). It performs the full
+# merged-PR forensics against the GitHub API, downloads the version files at
+# the base, release, and previous-tag commits, and hands them to the pinned
+# release-contract script - the single semantic model for version-file
+# validation - so this workflow cannot drift from the contract. It never checks
+# out or runs PR head code; the only checkout is the pinned toolkit. On success
+# it pins the exact release commit on a durable release-run/<version> recovery
+# branch and dispatches the release workflow. The pull_request_target trigger
+# itself cannot be workflow_call, so it stays in the caller stub.
 
 on:
     workflow_call:
@@ -52,6 +57,16 @@ on:
                 type: string
                 required: false
                 default: release.yml
+            workflows-repository:
+                description: "Repository holding the release toolkit scripts."
+                type: string
+                required: false
+                default: chhoumann/obsidian-plugin-workflows
+            workflows-ref:
+                description: "Ref of workflows-repository to check out. Keep in sync with the uses: pin."
+                type: string
+                required: false
+                default: v3
 
 permissions: {}
 
@@ -73,23 +88,39 @@ jobs:
               with:
                   egress-policy: audit
 
-            - name: Validate, tag, and dispatch exact release
+            - name: Checkout release toolkit
+              uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  repository: ${{ inputs.workflows-repository }}
+                  ref: ${{ inputs.workflows-ref }}
+                  path: .release-toolkit
+                  persist-credentials: false
+
+            - name: Resolve release file set
+              id: files
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+              run: |
+                  LIST="$(node .release-toolkit/scripts/release-contract.mjs files --package-manager "$PACKAGE_MANAGER" | jq -c '.files')"
+                  echo "list=$LIST" >> "$GITHUB_OUTPUT"
+
+            - name: Forensically validate merged release PR
+              id: forensics
               uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
               env:
                   PR_NUMBER: ${{ inputs.pr-number }}
                   PLUGIN_NAME: ${{ inputs.plugin-name }}
-                  PACKAGE_NAME: ${{ inputs.package-name || inputs.plugin-name }}
-                  MANIFEST_ID: ${{ inputs.manifest-id || inputs.plugin-name }}
                   DEFAULT_BRANCH: ${{ inputs.default-branch }}
-                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  RELEASE_FILES: ${{ steps.files.outputs.list }}
                   BOT_APP_SLUG: ${{ inputs.release-bot-app-slug }}
                   MERGER_LOGIN: ${{ inputs.release-merger-login }}
-                  RELEASE_WORKFLOW: ${{ inputs.release-workflow }}
                   EVENT_REF: ${{ github.ref }}
                   EVENT_SHA: ${{ github.sha }}
+                  EVENT_NAME: ${{ github.event_name }}
               with:
                   script: |
-                      const { isDeepStrictEqual } = require('node:util');
+                      const fs = require('node:fs');
+                      const path = require('node:path');
 
                       // Bounded retry for read-only forensic calls: a transient 5xx from the
                       // API must not abandon a release the maintainer already merged.
@@ -114,14 +145,9 @@ jobs:
                       if (!/^[a-z0-9-]+$/.test(plugin)) {
                         throw new Error(`plugin-name must match [a-z0-9-]+: ${plugin}`);
                       }
-                      const packageName = process.env.PACKAGE_NAME;
-                      const manifestId = process.env.MANIFEST_ID;
                       const defaultBranch = process.env.DEFAULT_BRANCH;
-                      const hasLock = process.env.PACKAGE_MANAGER === 'npm';
                       const botLogin = `${process.env.BOT_APP_SLUG}[bot]`;
-                      const expectedFiles = hasLock
-                        ? ['manifest.json', 'package-lock.json', 'package.json', 'versions.json']
-                        : ['manifest.json', 'package.json', 'versions.json'];
+                      const releaseFiles = JSON.parse(process.env.RELEASE_FILES);
                       const { owner, repo } = context.repo;
                       const repository = `${owner}/${repo}`;
                       const mergerLogin = process.env.MERGER_LOGIN || owner;
@@ -141,14 +167,10 @@ jobs:
                       if (pull.merged_by?.login !== mergerLogin) {
                         throw new Error(`PR #${pullNumber} was not merged by ${mergerLogin}.`);
                       }
-                      if (pull.base.ref !== defaultBranch || pull.head.repo?.full_name !== repository) {
-                        throw new Error(`PR #${pullNumber} has invalid base or repository provenance.`);
-                      }
                       const branchMatch = /^release\/((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/.exec(pull.head.ref);
                       if (!branchMatch) throw new Error(`PR #${pullNumber} does not use a valid release branch.`);
                       const version = branchMatch[1];
                       const title = `release(version): Release ${version}`;
-                      if (pull.title !== title) throw new Error(`PR #${pullNumber} title does not match ${version}.`);
 
                       const markerPattern = new RegExp(
                         `<!-- ${plugin}-release-pr schema=1 version=${version.replaceAll('.', '\\.')}` +
@@ -165,9 +187,6 @@ jobs:
                         per_page: 100,
                       }));
                       const changedFiles = files.map((file) => file.filename).sort();
-                      if (JSON.stringify(changedFiles) !== JSON.stringify(expectedFiles)) {
-                        throw new Error(`PR #${pullNumber} must change exactly the synchronized version files.`);
-                      }
 
                       const headCommit = await retryRead(() =>
                         github.rest.git.getCommit({ owner, repo, commit_sha: pull.head.sha }));
@@ -194,136 +213,33 @@ jobs:
                       if (releaseCommit.data.tree.sha !== headCommit.data.tree.sha) {
                         throw new Error(`PR #${pullNumber} merge tree does not match its validated head tree.`);
                       }
-                      if (process.env.EVENT_REF !== `refs/heads/${defaultBranch}` || process.env.EVENT_SHA !== releaseSha) {
+
+                      // The merge event runs from the default branch at the merge commit. An
+                      // explicit workflow_dispatch recovery (re-validating an already-merged
+                      // release PR, e.g. after a toolkit fix) runs from the current
+                      // default-branch head instead: everything above and below is
+                      // re-derived from the PR number, and the ancestry check still binds
+                      // the release commit to the protected branch. This mirrors the
+                      // trusted recovery source model of the release workflow (stage 3).
+                      // Every other event keeps the exact merge-commit pin.
+                      const branchHead = await retryRead(() =>
+                        github.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` }));
+                      const exactMergeEvent =
+                        process.env.EVENT_REF === `refs/heads/${defaultBranch}` &&
+                        process.env.EVENT_SHA === releaseSha;
+                      const trustedBranchRecovery =
+                        process.env.EVENT_NAME === 'workflow_dispatch' &&
+                        process.env.EVENT_REF === `refs/heads/${defaultBranch}` &&
+                        process.env.EVENT_SHA === branchHead.data.object.sha;
+                      if (!exactMergeEvent && !trustedBranchRecovery) {
                         throw new Error(
-                          `Release trigger must run from ${defaultBranch} at ${releaseSha}; got ` +
-                          `${process.env.EVENT_REF} at ${process.env.EVENT_SHA}.`,
+                          `Release trigger must run from ${defaultBranch} at the merge commit ` +
+                          `${releaseSha}, or be dispatched from the current branch head for ` +
+                          `recovery; got ${process.env.EVENT_NAME} on ${process.env.EVENT_REF} ` +
+                          `at ${process.env.EVENT_SHA}.`,
                         );
                       }
 
-                      function assertRecord(value, label) {
-                        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-                          throw new Error(`${label} must be a JSON object.`);
-                        }
-                      }
-
-                      function versionParts(value, label) {
-                        if (typeof value !== 'string' ||
-                            !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value)) {
-                          throw new Error(`${label} is not a stable semantic version.`);
-                        }
-                        return value.split('.').map(Number);
-                      }
-
-                      function compareVersions(left, right) {
-                        const leftParts = versionParts(left, 'candidate version');
-                        const rightParts = versionParts(right, 'base version');
-                        for (let index = 0; index < 3; index += 1) {
-                          if (leftParts[index] !== rightParts[index]) {
-                            return leftParts[index] - rightParts[index];
-                          }
-                        }
-                        return 0;
-                      }
-
-                      function rootLockPackage(lock, label) {
-                        assertRecord(lock.packages, `${label}.packages`);
-                        const rootPackage = lock.packages[''];
-                        assertRecord(rootPackage, `${label}.packages[""]`);
-                        return rootPackage;
-                      }
-
-                      function synchronizedVersion(packageJson, lock, manifest, label) {
-                        const values = [packageJson.version, manifest.version];
-                        if (hasLock) values.push(lock.version, rootLockPackage(lock, label).version);
-                        if (!values.every((value) => value === values[0])) {
-                          throw new Error(`${label} version fields are not synchronized.`);
-                        }
-                        versionParts(values[0], `${label} version`);
-                        return values[0];
-                      }
-
-                      function equalExceptField(candidate, baseline, field) {
-                        const normalized = structuredClone(candidate);
-                        normalized[field] = baseline[field];
-                        return isDeepStrictEqual(normalized, baseline);
-                      }
-
-                      async function readJsonAt(ref, file) {
-                        const response = await retryRead(() =>
-                          github.rest.repos.getContent({ owner, repo, path: file, ref }));
-                        const data = response.data;
-                        if (Array.isArray(data) || data.type !== 'file' || data.encoding !== 'base64' ||
-                            typeof data.content !== 'string') {
-                          throw new Error(`Unable to read regular JSON file ${file} at ${ref}.`);
-                        }
-                        const value = JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
-                        assertRecord(value, `${file} at ${ref}`);
-                        return value;
-                      }
-
-                      async function readVersionFiles(ref) {
-                        const [packageJson, manifest, versions] = await Promise.all([
-                          readJsonAt(ref, 'package.json'),
-                          readJsonAt(ref, 'manifest.json'),
-                          readJsonAt(ref, 'versions.json'),
-                        ]);
-                        const lock = hasLock ? await readJsonAt(ref, 'package-lock.json') : null;
-                        return { packageJson, manifest, versions, lock };
-                      }
-
-                      const base = await readVersionFiles(baseSha);
-                      const next = await readVersionFiles(releaseSha);
-                      const baseVersion = synchronizedVersion(base.packageJson, base.lock, base.manifest, 'base');
-                      const nextVersion = synchronizedVersion(next.packageJson, next.lock, next.manifest, 'release');
-                      if (base.packageJson.name !== packageName || base.manifest.id !== manifestId ||
-                          nextVersion !== version || compareVersions(nextVersion, baseVersion) <= 0) {
-                        throw new Error('Release identity or version progression is invalid.');
-                      }
-                      if (typeof base.manifest.minAppVersion !== 'string' || !base.manifest.minAppVersion ||
-                          typeof next.manifest.minAppVersion !== 'string' || !next.manifest.minAppVersion) {
-                        throw new Error('Manifest compatibility versions must be non-empty strings.');
-                      }
-                      const baseRecordedFloor = base.versions[baseVersion];
-                      if (typeof baseRecordedFloor !== 'string' || !baseRecordedFloor) {
-                        throw new Error(`Base versions.json does not record ${baseVersion}.`);
-                      }
-                      // The base manifest floor may run ahead of the recorded floor: a commit on
-                      // the default branch may raise minAppVersion before the release that
-                      // materializes it into versions.json. It may never fall below it.
-                      if (base.manifest.minAppVersion !== baseRecordedFloor &&
-                          compareVersions(base.manifest.minAppVersion, baseRecordedFloor) <= 0) {
-                        throw new Error('Base minAppVersion must increase from the released compatibility floor.');
-                      }
-                      if (next.versions[nextVersion] !== next.manifest.minAppVersion) {
-                        throw new Error('Release version history does not match manifest compatibility.');
-                      }
-                      if (!equalExceptField(next.packageJson, base.packageJson, 'version')) {
-                        throw new Error('package.json changed outside its version field.');
-                      }
-                      if (hasLock) {
-                        const normalizedLock = structuredClone(next.lock);
-                        normalizedLock.version = base.lock.version;
-                        rootLockPackage(normalizedLock, 'release lock').version =
-                          rootLockPackage(base.lock, 'base lock').version;
-                        if (!isDeepStrictEqual(normalizedLock, base.lock)) {
-                          throw new Error('package-lock.json changed outside its version fields.');
-                        }
-                      }
-                      if (!equalExceptField(next.manifest, base.manifest, 'version')) {
-                        throw new Error('manifest.json changed outside its version field.');
-                      }
-                      if (Object.prototype.hasOwnProperty.call(base.versions, nextVersion)) {
-                        throw new Error(`Base versions.json already contains ${nextVersion}.`);
-                      }
-                      const normalizedVersions = structuredClone(next.versions);
-                      delete normalizedVersions[nextVersion];
-                      if (!isDeepStrictEqual(normalizedVersions, base.versions)) {
-                        throw new Error('versions.json changed outside the new release entry.');
-                      }
-
-                      const branchHead = await retryRead(() =>
-                        github.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` }));
                       const comparison = await retryRead(() => github.rest.repos.compareCommitsWithBasehead({
                         owner,
                         repo,
@@ -332,6 +248,38 @@ jobs:
                       if (!['ahead', 'identical'].includes(comparison.data.status) ||
                           comparison.data.merge_base_commit.sha !== releaseSha) {
                         throw new Error(`Release commit ${releaseSha} is not on current ${defaultBranch}.`);
+                      }
+
+                      async function downloadVersionFiles(ref, root) {
+                        fs.mkdirSync(root, { recursive: true });
+                        for (const file of releaseFiles) {
+                          const response = await retryRead(() =>
+                            github.rest.repos.getContent({ owner, repo, path: file, ref }));
+                          const data = response.data;
+                          if (Array.isArray(data) || data.type !== 'file' || data.encoding !== 'base64' ||
+                              typeof data.content !== 'string') {
+                            throw new Error(`Unable to read regular release file ${file} at ${ref}.`);
+                          }
+                          fs.writeFileSync(path.join(root, file), Buffer.from(data.content, 'base64'), {
+                            flag: 'wx',
+                          });
+                        }
+                      }
+
+                      const temp = process.env.RUNNER_TEMP;
+                      const baseRoot = path.join(temp, 'release-base');
+                      const candidateRoot = path.join(temp, 'release-candidate');
+                      const previousRoot = path.join(temp, 'release-previous');
+                      await downloadVersionFiles(baseSha, baseRoot);
+                      await downloadVersionFiles(releaseSha, candidateRoot);
+
+                      // The contract script re-validates full version-file synchronization;
+                      // this parse only locates the previous release tag to download.
+                      const basePackage = JSON.parse(fs.readFileSync(path.join(baseRoot, 'package.json'), 'utf8'));
+                      const baseVersion = basePackage?.version;
+                      if (typeof baseVersion !== 'string' ||
+                          !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(baseVersion)) {
+                        throw new Error('Base package.json does not record a stable semantic version.');
                       }
 
                       async function resolveTagCommit(tag) {
@@ -359,24 +307,7 @@ jobs:
                       if (!previousTagSha) {
                         throw new Error(`Previous release tag ${baseVersion} does not exist.`);
                       }
-                      const tag = await readVersionFiles(previousTagSha);
-                      if (tag.packageJson.name !== packageName || tag.manifest.id !== manifestId ||
-                          synchronizedVersion(tag.packageJson, tag.lock, tag.manifest, 'previous tag') !== baseVersion ||
-                          tag.versions[baseVersion] !== tag.manifest.minAppVersion) {
-                        throw new Error(`Previous release tag ${baseVersion} has invalid version metadata.`);
-                      }
-                      // The compatibility floor may only rise, and version history is append-only
-                      // between releases (only a release PR edits versions.json). versionParts
-                      // inside compareVersions also asserts both minAppVersions are stable semver.
-                      if (compareVersions(base.manifest.minAppVersion, tag.manifest.minAppVersion) < 0) {
-                        throw new Error(
-                          `Base minAppVersion ${base.manifest.minAppVersion} must not be lower than ` +
-                          `previous release ${tag.manifest.minAppVersion}.`,
-                        );
-                      }
-                      if (!isDeepStrictEqual(tag.versions, base.versions)) {
-                        throw new Error('versions.json history diverges from the previous release tag.');
-                      }
+                      await downloadVersionFiles(previousTagSha, previousRoot);
                       const previousComparison = await retryRead(() =>
                         github.rest.repos.compareCommitsWithBasehead({
                           owner,
@@ -391,6 +322,96 @@ jobs:
                       const existingTagSha = await resolveTagCommit(version);
                       if (existingTagSha && existingTagSha !== releaseSha) {
                         throw new Error(`Tag ${version} points to ${existingTagSha}, expected ${releaseSha}.`);
+                      }
+
+                      const prInput = {
+                        baseRef: pull.base.ref,
+                        branch: pull.head.ref,
+                        changedFiles,
+                        defaultBranch,
+                        headRepository: pull.head.repo?.full_name ?? '',
+                        repository,
+                        title: pull.title,
+                        version,
+                      };
+                      fs.writeFileSync(path.join(temp, 'release-pr.json'), `${JSON.stringify(prInput, null, 2)}\n`, {
+                        flag: 'wx',
+                      });
+
+                      core.setOutput('version', version);
+                      core.setOutput('release-sha', releaseSha);
+                      core.setOutput('pr-number', String(pullNumber));
+
+            - name: Validate version-file contract
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  PACKAGE_NAME: ${{ inputs.package-name || inputs.plugin-name }}
+                  MANIFEST_ID: ${{ inputs.manifest-id || inputs.plugin-name }}
+              run: |
+                  node .release-toolkit/scripts/release-contract.mjs validate-release \
+                    --input "$RUNNER_TEMP/release-pr.json" \
+                    --base-root "$RUNNER_TEMP/release-base" \
+                    --candidate-root "$RUNNER_TEMP/release-candidate" \
+                    --previous-root "$RUNNER_TEMP/release-previous" \
+                    --package-name "$PACKAGE_NAME" \
+                    --manifest-id "$MANIFEST_ID" \
+                    --package-manager "$PACKAGE_MANAGER"
+
+            - name: Pin recovery branch and dispatch release
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+              env:
+                  VERSION: ${{ steps.forensics.outputs.version }}
+                  RELEASE_SHA: ${{ steps.forensics.outputs.release-sha }}
+                  PR_NUMBER: ${{ steps.forensics.outputs.pr-number }}
+                  PLUGIN_NAME: ${{ inputs.plugin-name }}
+                  RELEASE_WORKFLOW: ${{ inputs.release-workflow }}
+              with:
+                  script: |
+                      // Bounded retry for read-only calls; writes are never retried.
+                      async function retryRead(thunk) {
+                        let lastError;
+                        for (let attempt = 0; attempt < 4; attempt += 1) {
+                          try {
+                            return await thunk();
+                          } catch (error) {
+                            const status = error?.status ?? 0;
+                            if (status < 500 || status > 599) throw error;
+                            lastError = error;
+                            if (attempt < 3) {
+                              await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+                            }
+                          }
+                        }
+                        throw lastError;
+                      }
+
+                      const version = process.env.VERSION;
+                      const releaseSha = process.env.RELEASE_SHA;
+                      const pullNumber = Number(process.env.PR_NUMBER);
+                      if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) ||
+                          !/^[0-9a-f]{40}$/.test(releaseSha) ||
+                          !Number.isSafeInteger(pullNumber) || pullNumber < 1) {
+                        throw new Error('Invalid validated release identity.');
+                      }
+                      const { owner, repo } = context.repo;
+
+                      // git cannot hold refs/heads/release-run and refs/heads/release-run/*
+                      // at once, so a stale branch literally named "release-run" makes the
+                      // recovery-branch createRef fail with an opaque 422. Preflight it into
+                      // an actionable error instead.
+                      const runNamespace = await retryRead(() =>
+                        github.paginate(github.rest.git.listMatchingRefs, {
+                          owner,
+                          repo,
+                          ref: 'heads/release-run',
+                          per_page: 100,
+                        }));
+                      if (runNamespace.some((reference) => reference.ref === 'refs/heads/release-run')) {
+                        throw new Error(
+                          "A branch named 'release-run' exists and blocks creation of " +
+                          'release-run/<version> recovery branches. Delete or rename that ' +
+                          'branch, then re-run release validation.',
+                        );
                       }
 
                       const runBranch = `release-run/${version}`;
@@ -417,4 +438,4 @@ jobs:
                         ref: runBranch,
                         inputs: { releasePr: String(pullNumber) },
                       });
-                      core.notice(`Dispatched ${plugin} ${version} from release PR #${pullNumber} at ${runBranch}.`);
+                      core.notice(`Dispatched ${process.env.PLUGIN_NAME} ${version} from release PR #${pullNumber} at ${runBranch}.`);
