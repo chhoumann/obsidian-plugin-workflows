@@ -582,7 +582,14 @@ jobs:
                         } catch (error) {
                           if (error.status !== 422) throw error;
                         }
+                        // The read-after-write can lag replication (observed on 2 of the
+                        // first 3 production releases), so retry the verify with a bounded
+                        // backoff before declaring the tag wrong.
                         tagSha = await resolveTagCommit();
+                        for (let attempt = 0; !tagSha && attempt < 10; attempt += 1) {
+                          await new Promise((resolve) => setTimeout(resolve, 2000));
+                          tagSha = await resolveTagCommit();
+                        }
                       }
                       if (tagSha !== releaseSha) {
                         throw new Error(`Tag ${version} points to ${tagSha}, expected ${releaseSha}.`);
