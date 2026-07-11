@@ -12,10 +12,7 @@ import {
 } from "./release-contract.mjs";
 
 /** @type {Array<{ type: string; scope?: string; release: "patch" }>} */
-export const RELEASE_RULES = [
-	{ type: "chore", release: "patch" },
-	{ scope: "deps", type: "build", release: "patch" },
-];
+export const RELEASE_RULES = [{ scope: "deps", type: "build", release: "patch" }];
 
 const RELEASE_TYPES = new Set(["major", "minor", "patch"]);
 const silentLogger = { error() {}, log() {}, success() {}, warn() {} };

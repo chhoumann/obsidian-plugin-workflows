@@ -94,6 +94,7 @@ describe("release plan", () => {
 	it("emits an explicit no-release plan", async () => {
 		const root = await releaseRepository("npm");
 		commit(root, "docs: clarify installation");
+		commit(root, "chore: modernize tooling");
 		const plan = await calculateReleasePlan({ cwd: root });
 		assertMatchObject(plan, { notes: "", release: false, schemaVersion: 1 });
 		assert.equal(plan.baseSha, git(root, ["rev-parse", "HEAD"]));
@@ -107,7 +108,6 @@ describe("release plan", () => {
 			"major",
 			"3.0.0",
 		],
-		["chore: modernize tooling", "patch", "2.17.4"],
 		["build(deps): update Vite", "patch", "2.17.4"],
 	];
 	for (const [message, type, version] of bumpCases) {
