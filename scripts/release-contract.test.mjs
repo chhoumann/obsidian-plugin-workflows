@@ -9,6 +9,7 @@ import {
 	materializeVersionFiles,
 	resolveReleaseConfig,
 	validateCurrentVersionFiles,
+	validateMergedRelease,
 	validatePreviousTagHistory,
 	validateReleasePr,
 	validateVersionFiles,
@@ -395,6 +396,147 @@ describe("release PR provenance", () => {
 			assert.throws(() => validateReleasePr(input, npmConfig), error);
 		});
 	}
+});
+
+describe("merged release validation", () => {
+	function mergedPrInput(config, version = "2.17.4") {
+		return {
+			baseRef: "master",
+			branch: `release/${version}`,
+			changedFiles: [...config.files],
+			headRepository: "chhoumann/PodNotes",
+			repository: "chhoumann/PodNotes",
+			title: `release(version): Release ${version}`,
+			version,
+		};
+	}
+
+	async function makeMergedFixture(config) {
+		const baseRoot = await makeTempRoot("merged-base");
+		const candidateRoot = await makeTempRoot("merged-candidate");
+		const previousRoot = await makeTempRoot("merged-previous");
+		await writeVersionFixture(baseRoot, config);
+		await writeVersionFixture(previousRoot, config);
+		materializeVersionFiles({ baseSha: BASE_SHA, config, out: candidateRoot, root: baseRoot, version: "2.17.4" });
+		return {
+			baseRoot,
+			candidateRoot,
+			config,
+			manifestId: "podnotes",
+			packageName: "podnotes",
+			previousRoot,
+			prInput: mergedPrInput(config),
+		};
+	}
+
+	for (const config of [npmConfig, pnpmConfig]) {
+		it(`accepts a valid merged release (${config.packageManager})`, async () => {
+			const options = await makeMergedFixture(config);
+			assert.deepEqual(validateMergedRelease(options), { baseVersion: "2.17.3", version: "2.17.4" });
+		});
+	}
+
+	it("rejects a base package.json name mismatch", async () => {
+		const options = await makeMergedFixture(npmConfig);
+		assert.throws(
+			() => validateMergedRelease({ ...options, packageName: "other-plugin" }),
+			/Base package.json name must be other-plugin/,
+		);
+	});
+
+	it("rejects a previous tag manifest id mismatch", async () => {
+		const options = await makeMergedFixture(npmConfig);
+		const manifest = JSON.parse(await fs.readFile(path.join(options.previousRoot, "manifest.json"), "utf8"));
+		manifest.id = "someone-else";
+		await writeJson(path.join(options.previousRoot, "manifest.json"), manifest);
+		assert.throws(
+			() => validateMergedRelease(options),
+			/Previous tag manifest.json id must be podnotes/,
+		);
+	});
+
+	it("rejects a previous tag whose version differs from base", async () => {
+		const options = await makeMergedFixture(npmConfig);
+		await writeVersionFixture(options.previousRoot, npmConfig, "2.17.2");
+		assert.throws(
+			() => validateMergedRelease(options),
+			/Previous tag version 2.17.2 does not match base 2.17.3/,
+		);
+	});
+
+	it("rejects a previous tag whose recorded floor differs from its manifest", async () => {
+		const options = await makeMergedFixture(npmConfig);
+		await writeJson(path.join(options.previousRoot, "versions.json"), { "2.17.3": "0.9.0" });
+		assert.throws(
+			() => validateMergedRelease(options),
+			/Previous tag versions.json does not match its manifest minAppVersion/,
+		);
+	});
+
+	it("rejects version history diverging between previous tag and base", async () => {
+		const options = await makeMergedFixture(npmConfig);
+		await writeJson(path.join(options.previousRoot, "versions.json"), {
+			"2.16.0": "0.9.0",
+			"2.17.3": "1.0.0",
+		});
+		assert.throws(
+			() => validateMergedRelease(options),
+			/history diverges from the previous release tag/,
+		);
+	});
+
+	it("rejects tampered release PR provenance", async () => {
+		const options = await makeMergedFixture(npmConfig);
+		assert.throws(
+			() => validateMergedRelease({ ...options, prInput: { ...options.prInput, title: "Release 2.17.4" } }),
+			/title\/version/,
+		);
+		assert.throws(
+			() =>
+				validateMergedRelease({
+					...options,
+					prInput: {
+						...options.prInput,
+						changedFiles: [...options.prInput.changedFiles, "src/main.ts"],
+					},
+				}),
+			/exactly/,
+		);
+	});
+
+	it("accepts a base carrying a pending minAppVersion raise", async () => {
+		const baseRoot = await makeTempRoot("merged-pending-base");
+		const candidateRoot = await makeTempRoot("merged-pending-candidate");
+		const previousRoot = await makeTempRoot("merged-pending-previous");
+		await writeVersionFixture(baseRoot, npmConfig);
+		await writeVersionFixture(previousRoot, npmConfig);
+		const manifest = JSON.parse(await fs.readFile(path.join(baseRoot, "manifest.json"), "utf8"));
+		manifest.minAppVersion = "1.1.0";
+		await writeJson(path.join(baseRoot, "manifest.json"), manifest);
+		materializeVersionFiles({
+			baseSha: BASE_SHA,
+			config: npmConfig,
+			out: candidateRoot,
+			root: baseRoot,
+			version: "2.17.4",
+		});
+		const candidateVersions = JSON.parse(
+			await fs.readFile(path.join(candidateRoot, "versions.json"), "utf8"),
+		);
+		assert.equal(candidateVersions["2.17.4"], "1.1.0");
+		assert.deepEqual(
+			validateMergedRelease({
+				baseRoot,
+				candidateRoot,
+				config: npmConfig,
+				manifestId: "podnotes",
+				packageName: "podnotes",
+				previousRoot,
+				prInput: mergedPrInput(npmConfig),
+			}),
+			{ baseVersion: "2.17.3", version: "2.17.4" },
+		);
+	});
 });
 
 describe("release artifact manifest", () => {

@@ -57,7 +57,7 @@ deps) match the Conventional Commit types the release toolkit expects. Add extra
 ## `caller-workflows/`
 
 Minimal stubs that consume the reusable workflows in this repo. Copy each into
-your repo's `.github/workflows/` and pin `@v1`/`@v2` (or a commit SHA). They
+your repo's `.github/workflows/` and pin `@v1`/`@v3` (or a commit SHA). They
 encode the triggers that CANNOT live in the reusable workflow.
 
 CI and quality:
@@ -76,7 +76,8 @@ Release pipeline (worked for podnotes; see the repo root README's
   standing release PR, plus a `workflow_dispatch` escape hatch for manual and
   dry-run planning.
 - `release-trigger.yml` - `pull_request_target: [closed]` that runs the merged-PR
-  forensics and dispatches the release.
+  forensics and dispatches the release, plus a `workflow_dispatch` recovery
+  trigger for re-validating an already-merged release PR.
 - `release.yml` - `workflow_dispatch`, dispatched by the trigger stub, that builds,
   attests, and publishes.
 
