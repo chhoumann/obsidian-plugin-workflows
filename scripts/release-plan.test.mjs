@@ -4,7 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { calculateReleasePlan, incrementVersion } from "./release-plan.mjs";
+import {
+	DEFAULT_RELEASE_RULES,
+	calculateReleasePlan,
+	incrementVersion,
+	parseReleasePolicy,
+} from "./release-plan.mjs";
 
 const tempRoots = [];
 
@@ -179,5 +184,80 @@ describe("release plan", () => {
 		assert.equal(incrementVersion("2.17.3", "minor"), "2.18.0");
 		assert.equal(incrementVersion("2.17.3", "major"), "3.0.0");
 		assert.throws(() => incrementVersion("2.17.3", "prerelease"), /Unsupported/);
+	});
+
+	it("records the default release policy on a no-release plan", async () => {
+		const root = await releaseRepository("npm");
+		commit(root, "ci: tighten workflow permissions");
+		const plan = await calculateReleasePlan({ cwd: root });
+		assertMatchObject(plan, {
+			release: false,
+			releasePolicy: DEFAULT_RELEASE_RULES,
+			schemaVersion: 1,
+		});
+	});
+
+	it("releases a ci commit under a custom policy and records that policy", async () => {
+		const root = await releaseRepository("npm");
+		commit(root, "ci: tighten workflow permissions");
+		const releaseRules = [{ type: "ci", release: "patch" }];
+		const plan = await calculateReleasePlan({ cwd: root, releaseRules });
+		assertMatchObject(plan, {
+			nextVersion: "2.17.4",
+			release: true,
+			releasePolicy: releaseRules,
+			releaseType: "patch",
+		});
+	});
+
+	it("suppresses a release when a policy rule sets release to false", async () => {
+		const root = await releaseRepository("npm");
+		commit(root, "fix(deps): bump got");
+		const releaseRules = [{ type: "fix", scope: "deps", release: false }];
+		const plan = await calculateReleasePlan({ cwd: root, releaseRules });
+		assertMatchObject(plan, { release: false, releasePolicy: releaseRules });
+	});
+
+	it("rejects invalid release rules passed to calculateReleasePlan", async () => {
+		const root = await releaseRepository("npm");
+		commit(root, "fix: correct playback");
+		await assert.rejects(
+			calculateReleasePlan({ cwd: root, releaseRules: [{ release: "patch" }] }),
+			/at least one matcher field/,
+		);
+	});
+
+	it("parses release policies and rejects malformed ones", () => {
+		assert.deepEqual(parseReleasePolicy(""), DEFAULT_RELEASE_RULES);
+		assert.deepEqual(parseReleasePolicy(undefined), DEFAULT_RELEASE_RULES);
+		assert.deepEqual(parseReleasePolicy("[]"), []);
+		assert.deepEqual(parseReleasePolicy('[{ "type": "ci", "release": false }]'), [
+			{ type: "ci", release: false },
+		]);
+		assert.deepEqual(parseReleasePolicy('[{ "breaking": true, "release": "major" }]'), [
+			{ breaking: true, release: "major" },
+		]);
+		assert.deepEqual(parseReleasePolicy('[{ "revert": false, "release": "patch" }]'), [
+			{ revert: false, release: "patch" },
+		]);
+		assert.throws(() => parseReleasePolicy("not json"), /must be valid JSON/);
+		assert.throws(() => parseReleasePolicy('{ "type": "ci" }'), /must be an array/);
+		assert.throws(() => parseReleasePolicy('[{ "type": "ci" }]'), /index 0 must declare a release outcome/);
+		assert.throws(
+			() => parseReleasePolicy('[{ "type": "ci", "release": "prerelease" }]'),
+			/index 0 must set release to false/,
+		);
+		assert.throws(
+			() => parseReleasePolicy('[{ "type": 3, "release": "patch" }]'),
+			/index 0 must set type to a non-empty string or boolean/,
+		);
+		assert.throws(
+			() => parseReleasePolicy('[{ "type": "", "release": "patch" }]'),
+			/index 0 must set type to a non-empty string or boolean/,
+		);
+		assert.throws(
+			() => parseReleasePolicy('[{ "release": "patch" }]'),
+			/index 0 needs at least one matcher field/,
+		);
 	});
 });

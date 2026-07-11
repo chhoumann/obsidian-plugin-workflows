@@ -37,6 +37,11 @@ on:
                 type: string
                 required: false
                 default: npm
+            release-policy:
+                description: "JSON list of semantic-release releaseRules deciding which commits cut a release. Empty uses the toolkit default."
+                type: string
+                required: false
+                default: ""
             node-version:
                 description: "Node.js version for the toolkit install."
                 type: string
@@ -236,12 +241,18 @@ jobs:
               env:
                   TARGET_SHA: ${{ steps.target.outputs.sha }}
                   PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  RELEASE_POLICY: ${{ inputs.release-policy }}
               run: |
                   PLAN="$RUNNER_TEMP/release-plan.json"
                   NOTES="$RUNNER_TEMP/release-notes.md"
+                  POLICY_ARGS=()
+                  if [ -n "$RELEASE_POLICY" ]; then
+                      POLICY_ARGS+=(--release-policy "$RELEASE_POLICY")
+                  fi
                   node .release-toolkit/scripts/release-plan.mjs \
                     --cwd . \
                     --package-manager "$PACKAGE_MANAGER" \
+                    "${POLICY_ARGS[@]}" \
                     --output "$PLAN" \
                     --notes-output "$NOTES"
                   test "$(jq -r '.baseSha' "$PLAN")" = "$TARGET_SHA"

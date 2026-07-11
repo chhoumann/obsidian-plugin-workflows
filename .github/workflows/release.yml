@@ -37,6 +37,11 @@ on:
                 type: string
                 required: false
                 default: npm
+            release-policy:
+                description: "JSON list of semantic-release releaseRules deciding which commits cut a release. Must match the prepare stage. Empty uses the toolkit default."
+                type: string
+                required: false
+                default: ""
             node-version:
                 description: "Node.js version for the build."
                 type: string
@@ -375,10 +380,16 @@ jobs:
               env:
                   VERSION: ${{ needs.resolve.outputs.version }}
                   PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  RELEASE_POLICY: ${{ inputs.release-policy }}
               run: |
+                  POLICY_ARGS=()
+                  if [ -n "$RELEASE_POLICY" ]; then
+                      POLICY_ARGS+=(--release-policy "$RELEASE_POLICY")
+                  fi
                   node .release-toolkit/scripts/release-plan.mjs \
                     --cwd . \
                     --package-manager "$PACKAGE_MANAGER" \
+                    "${POLICY_ARGS[@]}" \
                     --expected-version "$VERSION" \
                     --notes-output "$RUNNER_TEMP/release-notes.md" \
                     --output "$RUNNER_TEMP/release-plan.json"
