@@ -200,15 +200,23 @@ otherwise. The layered checks:
   reparented release commit.
 - **Squash-parent + tree-sha** - the squash merge commit has one parent (the base)
   and its tree equals the validated head tree. Blocks a merge that altered content.
-- **Prior-tag ancestry** - the previous version tag exists, has valid synchronized
-  metadata, and is an ancestor of the base. Blocks version-history forgery and
-  out-of-order releases.
+- **Prior-tag ancestry and history** - the previous version tag exists, has valid
+  synchronized metadata, is an ancestor of the base, its recorded `versions.json`
+  history is byte-identical to the base, and the compatibility floor
+  (`minAppVersion`) has not decreased. Blocks version-history forgery, silent
+  history rewrites, a lowered floor slipped in between releases, and out-of-order
+  releases.
 - **Durable recovery branch** `release-run/<version>` - pins the exact release SHA
   so a failed or re-run release recovers to the same commit; deleted only after a
   verified publish.
 - **Attestation + post-publish verification** - `attest-build-provenance` signs the
   assets; publish runs `gh attestation verify` against the exact source digest, then
   downloads every remote asset and re-hashes it. Blocks tampered or swapped assets.
+
+The read-only forensic API calls in validate and resolve are wrapped in a bounded
+retry (up to four attempts on a transient 5xx) so a momentary API outage cannot
+strand a release the maintainer already merged; only reads are retried, never the
+recovery-branch or dispatch writes.
 
 The App token is used **only** in prepare, to author the release commit and PR as
 the bot the maintainer controls. Tags and the GitHub release are created by the
