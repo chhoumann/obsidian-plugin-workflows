@@ -14,12 +14,16 @@ action SHA, and no single source of truth existed. This repo is that source of
 truth. Each plugin repo consumes the workflows via `workflow_call` and pins a
 version, so a fix lands once here and every consumer picks it up.
 
-Scope is deliberate: **reusable CI/quality workflows only.** The release
-*pipelines* stay per-repo because they encode genuinely different philosophies
-(quickadd publishes with an app token and provenance; podnotes runs a machine-PR
-release pipeline). What the release pipelines share - the `version-bump.mjs`
-script, the semantic-release plugin chain, and the dependabot config - lives in
-[`templates/`](./templates) as copy-in files, not as a workflow.
+This repo carries two things: the **reusable CI/quality workflows** (`ci.yml`,
+`codeql.yml`, `dependency-review.yml`, `pr-title.yml`) and the **shared forensic
+release pipeline** (`release-prepare.yml`, `release-validate.yml`, `release.yml`
+plus the `scripts/` release toolkit). All four plugin repos standardize on the
+same PR-to-release model; a consumer keeps only thin caller stubs and pins a ref.
+See [Release pipeline](#release-pipeline) and the design doc
+[`release-pipeline-plan.md`](./release-pipeline-plan.md).
+
+A few genuinely copy-in bits (the `version-bump.mjs` used by manual bumps, the
+dependabot config) still live in [`templates/`](./templates).
 
 ## Consumption model
 
@@ -119,6 +123,154 @@ never checks out or runs PR head code.
 
 Example caller: [`templates/caller-workflows/pr-title.yml`](./templates/caller-workflows/pr-title.yml).
 
+## Release pipeline
+
+The forensic PR-to-release pipeline all four plugin repos share. Full design in
+[`release-pipeline-plan.md`](./release-pipeline-plan.md); this is the operator's
+guide.
+
+**The model.** After every green push to the default branch, a per-repo GitHub
+App bot opens (or refreshes) exactly one standing release PR containing only the
+synchronized version files and generated notes - skipped when no conventional
+commits warrant a release. **Merging that PR is the sole release act.** The merge
+fires a forensic validator that binds the merged commit to the exact planned
+diff, then a publisher rebuilds, re-verifies, attests, and publishes the release.
+
+```
+push to default branch -> CI green
+   -> release-prepare  (App bot opens/refreshes ONE draft release PR)
+   -> maintainer reviews green checks, marks ready, squash-merges
+   -> release-validate (full merged-PR forensics + recovery branch + dispatch)
+   -> release          (resolve + build + tag + attest + publish + notify)
+```
+
+### Reusable workflows and their triggers
+
+`workflow_run` and `pull_request_target` cannot live in a called workflow, so
+each consumer keeps three thin caller stubs (in
+[`templates/caller-workflows/`](./templates/caller-workflows)) that carry only the
+trigger + `uses:`; all logic lives in the reusables here.
+
+| Reusable | Called from stub triggered by | Consumer stub |
+| --- | --- | --- |
+| `release-prepare.yml` | `workflow_run` (CI completed) + `workflow_dispatch` escape hatch | `release-prepare.yml` |
+| `release-validate.yml` | `pull_request_target: [closed]` | `release-trigger.yml` |
+| `release.yml` | `workflow_dispatch` (dispatched by validate) | `release.yml` |
+
+A caller stub sets the token ceiling with a top-level or per-job `permissions:`
+that grants the union its reusable needs; the reusable scopes each job down from
+there. Copy the stubs, pin `@v2`, and set `workflows-ref: v2` to match the pin.
+
+### Inputs
+
+Shared across all three reusables:
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `plugin-name` | (required) | Marker prefix: `<plugin>-release-commit` / `<plugin>-release-pr`. |
+| `package-name` | `plugin-name` | Expected `package.json` `name`. |
+| `manifest-id` | `plugin-name` | Expected `manifest.json` `id`. |
+| `default-branch` | `master` | Branch release PRs target. |
+| `package-manager` | `npm` | `npm` or `pnpm`; drives the release-file set (npm syncs `package-lock.json`, pnpm has no lockfile in the set). |
+| `release-bot-app-slug` | (required) | App slug; the expected bot login is `<slug>[bot]`. |
+| `workflows-repository` / `workflows-ref` | `chhoumann/obsidian-plugin-workflows` / `v2` | Where and at what ref the release toolkit scripts are checked out. |
+
+`release-prepare.yml` adds: `target-sha` (empty = default-branch head),
+`node-version`, `app-id` (a repo **variable** value), the `release-app-private-key`
+**secret**, and `dry-run`. `release-validate.yml` adds: `pr-number`,
+`release-merger-login` (empty = repo owner), and `release-workflow` (the consumer
+workflow to dispatch). `release.yml` adds: `release-pr`, `node-version`,
+`release-assets` (JSON list), `build-command`, `verify-commands` (multiline),
+`setup-python` / `python-version` / `docs-requirements`, `notify-name`, and the
+optional `slack-webhook` / `discord-webhook` secrets.
+
+### Security model - what each forensic check defends against
+
+Everything after "maintainer clicks merge" is treated as adversarial until proven
+otherwise. The layered checks:
+
+- **Standing PR provenance** - PR author is the App bot, base is the default
+  branch, head repo is this repo, branch is `release/<semver>`, title is the exact
+  contract string. Blocks a human- or fork-authored PR impersonating a release.
+- **Exact version-file diff** - the PR changes exactly the release-file set;
+  `release-contract.mjs validate-files` re-derives that only version fields moved.
+  Blocks smuggling source or lockfile changes into a "version bump".
+- **Commit-message contract + parent** - the head commit message is the exact
+  marker and its single parent is the recorded base. Blocks a rewritten or
+  reparented release commit.
+- **Squash-parent + tree-sha** - the squash merge commit has one parent (the base)
+  and its tree equals the validated head tree. Blocks a merge that altered content.
+- **Prior-tag ancestry** - the previous version tag exists, has valid synchronized
+  metadata, and is an ancestor of the base. Blocks version-history forgery and
+  out-of-order releases.
+- **Durable recovery branch** `release-run/<version>` - pins the exact release SHA
+  so a failed or re-run release recovers to the same commit; deleted only after a
+  verified publish.
+- **Attestation + post-publish verification** - `attest-build-provenance` signs the
+  assets; publish runs `gh attestation verify` against the exact source digest, then
+  downloads every remote asset and re-hashes it. Blocks tampered or swapped assets.
+
+The App token is used **only** in prepare, to author the release commit and PR as
+the bot the maintainer controls. Tags and the GitHub release are created by the
+default `GITHUB_TOKEN` (branch protection guards branches, not tags), so the
+release object's author stays `github-actions[bot]`.
+
+### Per-repo GitHub App setup
+
+Each repo needs its own release-bot App so PR authorship binds to an identity you
+control and can be made a branch-protection bypass actor. Per repo:
+
+1. Create a GitHub App (Settings -> Developer settings -> GitHub Apps -> New).
+   Name it e.g. `<plugin> Release Bot`; note the resulting **slug** (lowercased,
+   spaces to hyphens, e.g. `podnotes-release-bot`) - it must equal
+   `release-bot-app-slug`.
+2. Repository permissions: **Contents: Read and write** and **Pull requests: Read
+   and write**. No account permissions, no webhook.
+3. Generate a private key (downloads a `.pem`).
+4. Install the App on the plugin repo only (Install App -> select the repo).
+5. In the repo: add a variable `RELEASE_APP_ID` (Settings -> Secrets and variables
+   -> Actions -> Variables) with the App's numeric id, and a secret
+   `RELEASE_APP_PRIVATE_KEY` with the full `.pem` contents.
+6. If the default branch is protected, add the App as an allowed bypass/merge actor
+   as your ruleset requires (the maintainer still merges the PR; the App only
+   authors it).
+
+### Dry-run smoke test
+
+Before a repo's first real release, dispatch the **Prepare release** workflow
+manually (Actions -> Prepare release -> Run workflow) with `dry-run: true` wired in
+the stub, or temporarily uncomment `# dry-run: true`. The plan job computes the
+version and notes and uploads them as an artifact; the open-PR job is skipped, so
+nothing is pushed and no App call is made (dummy `app-id` / slug are fine for a
+pure planning check). Confirm the planned version and notes look right, then remove
+the dry-run.
+
+### Migration checklist (release pipeline)
+
+1. Ensure the current released version is tagged and has a published GitHub release
+   (the planner requires a tagged baseline).
+2. Create and install the release-bot App; set `RELEASE_APP_ID` +
+   `RELEASE_APP_PRIVATE_KEY` (above).
+3. Copy the three caller stubs from
+   [`templates/caller-workflows/`](./templates/caller-workflows)
+   (`release-prepare.yml`, `release-trigger.yml`, `release.yml`) into
+   `.github/workflows/`. Set `plugin-name` (lowercase, `[a-z0-9-]+`),
+   `package-manager`, `default-branch`, `node-version`, `release-bot-app-slug`,
+   `release-assets` (add `styles.css` if the plugin ships one), and
+   `verify-commands` to match the repo's scripts.
+   - **Two pins move together:** the `uses: ...@v2` ref and the `workflows-ref`
+     input on `release-prepare.yml` / `release.yml` both select this repo's
+     version - bump them in lockstep (Dependabot bumps the `uses:` pin; update
+     `workflows-ref` to match). `release-trigger.yml` has no `workflows-ref` (it
+     is pure API forensics, no toolkit checkout).
+   - **If the default branch is not `master`,** the literal appears in **five
+     places** across the three stubs: the `default-branch:` input in all three,
+     plus the `if:` gate in `release-prepare.yml` (`head_branch == 'master'`) and
+     in `release-trigger.yml` (`base.ref == 'master'`). Change all five.
+4. Retire the repo's old release workflow(s).
+5. Smoke-test with `dry-run: true`, then push a conventional commit to the default
+   branch and merge the release PR the bot opens.
+
 ## Pinned action versions
 
 Every third-party action is SHA-pinned with a version comment. These SHAs are
@@ -133,20 +285,30 @@ kept fresh by Dependabot in the source repos and reused here verbatim:
 | `github/codeql-action/*` | v4 | `54f647b7e1bb85c95cddabcd46b0c578ec92bc1a` |
 | `actions/dependency-review-action` | v5.0.0 | `a1d282b36b6f3519aa1f3fc636f609c47dddb294` |
 | `amannn/action-semantic-pull-request` | v6.1.1 | `48f256284bd46cdaab1048c3721360e808335d50` |
+| `actions/github-script` | v8.0.0 | `ed597411d8f924073f98dfc5c65a23a2325f34cd` |
+| `actions/create-github-app-token` | v3.2.0 | `bcd2ba49218906704ab6c1aa796996da409d3eb1` |
+| `actions/upload-artifact` | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` |
+| `actions/download-artifact` | v8.0.1 | `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` |
+| `actions/attest-build-provenance` | v4.1.1 | `0f67c3f4856b2e3261c31976d6725780e5e4c373` |
+| `actions/setup-python` | v6.3.0 | `ece7cb06caefa5fff74198d8649806c4678c61a1` |
+| `rtCamp/action-slack-notify` | v2.4.0 | `33ca3be66c6f378fe1610fd1d5258632dbed5e58` |
 
 Add this repo's `github-actions` ecosystem to each consumer's Dependabot so the
-`@v1`/SHA pins here get bumped like any other action.
+`@v1`/`@v2`/SHA pins here get bumped like any other action.
 
 ## Templates
 
 Copy-in files (not reusable workflows) in [`templates/`](./templates), with a
 per-file guide in [`templates/README.md`](./templates/README.md):
 
-- `version-bump.mjs` - syncs `manifest.json` + `versions.json` with the release.
-- `semantic-release.jsonc` - the canonical release plugin chain (paste into
-  `package.json` `"release"` or `.releaserc.json`).
+- `version-bump.mjs` - syncs `manifest.json` + `versions.json` for a manual
+  `npm version` / `pnpm version` bump (the shared pipeline does this itself).
+- `semantic-release.jsonc` - legacy semantic-release plugin chain, kept for repos
+  not yet on the shared release pipeline.
 - `dependabot.yml` - grouped weekly npm + github-actions updates.
-- `caller-workflows/` - minimal stubs consuming the four reusable workflows.
+- `caller-workflows/` - minimal stubs consuming the reusable workflows, including
+  the three release-pipeline stubs (`release-prepare.yml`, `release-trigger.yml`,
+  `release.yml`).
 
 ## Versioning of this repo
 
@@ -159,7 +321,7 @@ Consumers pin a ref, so this repo carries a moving major tag.
 - Cut `v2` only for a breaking change to a workflow's input surface or behavior.
   Leave `v1` in place so unmigrated consumers keep working, then migrate them.
 
-## Migration checklist for a consumer repo
+## Migration checklist (CI and quality workflows)
 
 1. Replace `.github/workflows/ci.yml` with the
    [`ci.yml` caller stub](./templates/caller-workflows/ci.yml); set
