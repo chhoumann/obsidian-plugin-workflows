@@ -1,0 +1,55 @@
+# Caller stub: release (stage 3). Worked example for podnotes (npm, docs build).
+# Copy to .github/workflows/release.yml and edit the per-repo values.
+#
+# workflow_dispatch is the only trigger: the reusable validate workflow (stage 2)
+# dispatches this on the durable release-run/<version> recovery branch. Keeping a
+# plain workflow_dispatch here also makes the release itself replayable for
+# recovery without re-running the whole pipeline.
+
+name: Release
+
+on:
+    workflow_dispatch:
+        inputs:
+            releasePr:
+                description: "Merged machine-generated release PR number to recover"
+                required: true
+                type: string
+
+permissions: {}
+
+concurrency:
+    group: release
+    cancel-in-progress: false
+
+jobs:
+    release:
+        permissions:
+            actions: read
+            attestations: write
+            contents: write
+            id-token: write
+            pull-requests: read
+        uses: chhoumann/obsidian-plugin-workflows/.github/workflows/release.yml@v2
+        with:
+            release-pr: ${{ inputs.releasePr }}
+            plugin-name: podnotes
+            package-manager: npm
+            default-branch: master
+            node-version: "22"
+            release-bot-app-slug: podnotes-release-bot
+            release-assets: '["main.js","manifest.json"]'
+            verify-commands: |
+                npm run lint
+                npm run format:check
+                npm run typecheck
+                npm run test
+                npm run docs:build
+            setup-python: true
+            python-version: "3.x"
+            docs-requirements: docs/requirements.txt
+            workflows-ref: v2
+        secrets:
+            # Optional: unset secrets resolve to '' and the notify job skips them.
+            slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
+            discord-webhook: ${{ secrets.DISCORD_WEBHOOK }}
