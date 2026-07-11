@@ -12,10 +12,60 @@ import {
 } from "./release-contract.mjs";
 
 /** @type {Array<{ type: string; scope?: string; release: "patch" }>} */
-export const RELEASE_RULES = [{ scope: "deps", type: "build", release: "patch" }];
+export const DEFAULT_RELEASE_RULES = [{ scope: "deps", type: "build", release: "patch" }];
 
 const RELEASE_TYPES = new Set(["major", "minor", "patch"]);
+const RELEASE_RULE_RELEASES = new Set([false, "major", "minor", "patch"]);
 const silentLogger = { error() {}, log() {}, success() {}, warn() {} };
+
+/** @param {unknown} value @returns {Array<Record<string, unknown>>} */
+function assertReleaseRules(value) {
+	if (!Array.isArray(value)) {
+		throw new Error("Release policy must be an array of release rules.");
+	}
+	for (const [index, rule] of value.entries()) {
+		if (typeof rule !== "object" || rule === null || Array.isArray(rule)) {
+			throw new Error(`Release rule at index ${index} must be an object.`);
+		}
+		if (!Object.hasOwn(rule, "release")) {
+			throw new Error(`Release rule at index ${index} must declare a release outcome.`);
+		}
+		if (!RELEASE_RULE_RELEASES.has(rule.release)) {
+			throw new Error(
+				`Release rule at index ${index} must set release to false, "major", "minor", or "patch".`,
+			);
+		}
+		const matcherKeys = Object.keys(rule).filter((key) => key !== "release");
+		if (matcherKeys.length === 0) {
+			throw new Error(
+				`Release rule at index ${index} needs at least one matcher field besides release.`,
+			);
+		}
+		for (const key of matcherKeys) {
+			const matcher = rule[key];
+			// The analyzer matches string fields (type, scope, subject, ...) and
+			// boolean fields (breaking, revert), so both shapes are release rules.
+			if (typeof matcher !== "boolean" && (typeof matcher !== "string" || !matcher)) {
+				throw new Error(
+					`Release rule at index ${index} must set ${key} to a non-empty string or boolean.`,
+				);
+			}
+		}
+	}
+	return value;
+}
+
+/** @param {string | undefined | null} raw */
+export function parseReleasePolicy(raw) {
+	if (raw === undefined || raw === null || raw === "") return DEFAULT_RELEASE_RULES;
+	let parsed;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		throw new Error("Release policy must be valid JSON.");
+	}
+	return assertReleaseRules(parsed);
+}
 
 /** @param {string} cwd @param {string[]} args */
 function git(cwd, args) {
@@ -133,6 +183,7 @@ function commitsSince(cwd, fromTag) {
  *   analyzer?: typeof analyzeCommits;
  *   expectedVersion?: string;
  *   notesGenerator?: typeof generateNotes;
+ *   releaseRules?: Array<Record<string, unknown>>;
  * }} CalculatePlanOptions
  */
 
@@ -160,9 +211,13 @@ export async function calculateReleasePlan(options) {
 	const previousVersion = lastTag ?? "0.0.0";
 	const lastReleaseSha = lastTag ? git(cwd, ["rev-parse", `${lastTag}^{commit}`]) : "";
 	const commits = commitsSince(cwd, lastTag);
+	const releaseRules =
+		options.releaseRules === undefined
+			? DEFAULT_RELEASE_RULES
+			: assertReleaseRules(options.releaseRules);
 	const analyzer = options.analyzer ?? analyzeCommits;
 	const releaseType = await analyzer(
-		{ releaseRules: RELEASE_RULES },
+		{ releaseRules },
 		{ commits, cwd, logger: silentLogger },
 	);
 
@@ -171,6 +226,7 @@ export async function calculateReleasePlan(options) {
 			baseSha,
 			notes: "",
 			release: false,
+			releasePolicy: releaseRules,
 			schemaVersion: 1,
 		};
 	}
@@ -217,6 +273,7 @@ export async function calculateReleasePlan(options) {
 		notes,
 		previousVersion: lastTag,
 		release: true,
+		releasePolicy: releaseRules,
 		releaseType,
 		schemaVersion: 1,
 	};
@@ -224,7 +281,7 @@ export async function calculateReleasePlan(options) {
 
 /** @param {string[]} argv */
 function parseArgs(argv) {
-	/** @type {{ cwd: string; packageManager?: string; expectedVersion?: string; notesOutput?: string; output?: string }} */
+	/** @type {{ cwd: string; packageManager?: string; expectedVersion?: string; notesOutput?: string; output?: string; releasePolicy?: string }} */
 	const options = { cwd: process.cwd() };
 	for (let index = 0; index < argv.length; index += 2) {
 		const key = argv[index];
@@ -237,6 +294,7 @@ function parseArgs(argv) {
 		else if (key === "--expected-version") options.expectedVersion = value;
 		else if (key === "--notes-output") options.notesOutput = value;
 		else if (key === "--output") options.output = value;
+		else if (key === "--release-policy") options.releasePolicy = value;
 		else throw new Error(`Unknown release-plan option: ${key}`);
 	}
 	return options;
@@ -251,6 +309,7 @@ async function main() {
 		cwd: path.resolve(options.cwd),
 		expectedVersion,
 		packageManager: options.packageManager,
+		releaseRules: parseReleasePolicy(options.releasePolicy),
 	});
 	if (options.expectedVersion) {
 		if (!plan.release || plan.nextVersion !== expectedVersion) {
