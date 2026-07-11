@@ -15,7 +15,7 @@ on:
                 type: string
                 required: true
             plugin-name:
-                description: "Marker-string prefix."
+                description: "Marker-string prefix (must match [a-z0-9-]+)."
                 type: string
                 required: true
             package-name:
@@ -92,6 +92,9 @@ jobs:
                       const { isDeepStrictEqual } = require('node:util');
 
                       const plugin = process.env.PLUGIN_NAME;
+                      if (!/^[a-z0-9-]+$/.test(plugin)) {
+                        throw new Error(`plugin-name must match [a-z0-9-]+: ${plugin}`);
+                      }
                       const packageName = process.env.PACKAGE_NAME;
                       const manifestId = process.env.MANIFEST_ID;
                       const defaultBranch = process.env.DEFAULT_BRANCH;

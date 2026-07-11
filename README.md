@@ -254,9 +254,19 @@ the dry-run.
 3. Copy the three caller stubs from
    [`templates/caller-workflows/`](./templates/caller-workflows)
    (`release-prepare.yml`, `release-trigger.yml`, `release.yml`) into
-   `.github/workflows/`. Set `plugin-name`, `package-manager`, `default-branch`,
-   `node-version`, `release-bot-app-slug`, `release-assets` (add `styles.css` if
-   the plugin ships one), and `verify-commands` to match the repo's scripts.
+   `.github/workflows/`. Set `plugin-name` (lowercase, `[a-z0-9-]+`),
+   `package-manager`, `default-branch`, `node-version`, `release-bot-app-slug`,
+   `release-assets` (add `styles.css` if the plugin ships one), and
+   `verify-commands` to match the repo's scripts.
+   - **Two pins move together:** the `uses: ...@v2` ref and the `workflows-ref`
+     input on `release-prepare.yml` / `release.yml` both select this repo's
+     version - bump them in lockstep (Dependabot bumps the `uses:` pin; update
+     `workflows-ref` to match). `release-trigger.yml` has no `workflows-ref` (it
+     is pure API forensics, no toolkit checkout).
+   - **If the default branch is not `master`,** the literal appears in **five
+     places** across the three stubs: the `default-branch:` input in all three,
+     plus the `if:` gate in `release-prepare.yml` (`head_branch == 'master'`) and
+     in `release-trigger.yml` (`base.ref == 'master'`). Change all five.
 4. Retire the repo's old release workflow(s).
 5. Smoke-test with `dry-run: true`, then push a conventional commit to the default
    branch and merge the release PR the bot opens.

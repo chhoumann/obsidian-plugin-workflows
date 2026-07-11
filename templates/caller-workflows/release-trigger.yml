@@ -37,4 +37,3 @@ jobs:
             default-branch: master
             release-bot-app-slug: podnotes-release-bot
             release-workflow: release.yml
-            workflows-ref: v2

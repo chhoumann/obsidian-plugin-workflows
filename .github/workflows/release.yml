@@ -14,7 +14,7 @@ on:
                 type: string
                 required: true
             plugin-name:
-                description: "Marker-string prefix."
+                description: "Marker-string prefix (must match [a-z0-9-]+)."
                 type: string
                 required: true
             package-name:
@@ -46,6 +46,11 @@ on:
                 description: "GitHub App slug; the expected PR author is <slug>[bot]."
                 type: string
                 required: true
+            release-merger-login:
+                description: "Login required to have merged the PR. Empty means the repo owner."
+                type: string
+                required: false
+                default: ""
             release-assets:
                 description: 'JSON list of release asset file names, e.g. ["main.js","manifest.json","styles.css"].'
                 type: string
@@ -135,11 +140,15 @@ jobs:
                   DEFAULT_BRANCH: ${{ inputs.default-branch }}
                   PACKAGE_MANAGER: ${{ inputs.package-manager }}
                   BOT_APP_SLUG: ${{ inputs.release-bot-app-slug }}
+                  MERGER_LOGIN: ${{ inputs.release-merger-login }}
                   EVENT_REF: ${{ github.ref }}
                   EVENT_SHA: ${{ github.sha }}
               with:
                   script: |
                       const plugin = process.env.PLUGIN_NAME;
+                      if (!/^[a-z0-9-]+$/.test(plugin)) {
+                        throw new Error(`plugin-name must match [a-z0-9-]+: ${plugin}`);
+                      }
                       const defaultBranch = process.env.DEFAULT_BRANCH;
                       const hasLock = process.env.PACKAGE_MANAGER === 'npm';
                       const botLogin = `${process.env.BOT_APP_SLUG}[bot]`;
@@ -148,6 +157,7 @@ jobs:
                         : ['manifest.json', 'package.json', 'versions.json'];
                       const { owner, repo } = context.repo;
                       const repository = `${owner}/${repo}`;
+                      const mergerLogin = process.env.MERGER_LOGIN || owner;
                       const rawNumber = process.env.DISPATCH_PR;
                       if (!/^[1-9]\d*$/.test(rawNumber)) throw new Error('release-pr must be a positive PR number.');
 
@@ -159,8 +169,8 @@ jobs:
                       if (pull.user?.login !== botLogin) {
                         throw new Error(`PR #${pullNumber} was not created by ${botLogin}.`);
                       }
-                      if (pull.merged_by?.login !== owner) {
-                        throw new Error(`PR #${pullNumber} was not merged by repository owner ${owner}.`);
+                      if (pull.merged_by?.login !== mergerLogin) {
+                        throw new Error(`PR #${pullNumber} was not merged by ${mergerLogin}.`);
                       }
                       if (pull.base.ref !== defaultBranch || pull.head.repo?.full_name !== repository) {
                         throw new Error(`PR #${pullNumber} has invalid base or repository provenance.`);
@@ -303,7 +313,9 @@ jobs:
                   git fetch --no-tags origin "$DEFAULT_BRANCH"
                   git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"
 
-                  RELEASE_FILES="$(node .release-toolkit/scripts/release-contract.mjs files --package-manager "$PACKAGE_MANAGER" | jq -r '.files[]' | sort)"
+                  # Byte-order (C locale) sort on both sides: git orders its diff
+                  # bytewise, so a locale-sensitive sort here would spuriously mismatch.
+                  RELEASE_FILES="$(node .release-toolkit/scripts/release-contract.mjs files --package-manager "$PACKAGE_MANAGER" | jq -r '.files[]' | LC_ALL=C sort)"
                   BASE_ROOT="$RUNNER_TEMP/release-base"
                   mkdir "$BASE_ROOT"
                   EXPECTED_DIFF=""
@@ -313,7 +325,7 @@ jobs:
                       git show "$BASE_SHA:$FILE" > "$BASE_ROOT/$FILE"
                   done <<< "$RELEASE_FILES"
                   EXPECTED_DIFF="${EXPECTED_DIFF%$'\n'}"
-                  ACTUAL_DIFF="$(git diff --name-status --no-renames "$BASE_SHA" "$RELEASE_SHA")"
+                  ACTUAL_DIFF="$(git diff --name-status --no-renames "$BASE_SHA" "$RELEASE_SHA" | LC_ALL=C sort)"
                   test "$ACTUAL_DIFF" = "$EXPECTED_DIFF"
 
                   node .release-toolkit/scripts/release-contract.mjs validate-files \
@@ -661,8 +673,9 @@ jobs:
                   GH_TOKEN: ${{ github.token }}
                   SOURCE_REF: ${{ needs.resolve.outputs.source-ref }}
                   RELEASE_ASSETS: ${{ inputs.release-assets }}
+                  WORKFLOWS_REPOSITORY: ${{ inputs.workflows-repository }}
               run: |
-                  SIGNER_WORKFLOW="github.com/${{ inputs.workflows-repository }}/.github/workflows/release.yml"
+                  SIGNER_WORKFLOW="github.com/${WORKFLOWS_REPOSITORY}/.github/workflows/release.yml"
                   echo "$RELEASE_ASSETS" | jq -r '.[]' | while IFS= read -r ASSET; do
                       [ -z "$ASSET" ] && continue
                       gh attestation verify "release-payload/$ASSET" \

@@ -14,7 +14,7 @@ on:
     workflow_call:
         inputs:
             plugin-name:
-                description: "Marker-string prefix: <plugin>-release-commit / <plugin>-release-pr."
+                description: "Marker-string prefix (must match [a-z0-9-]+): <plugin>-release-commit / <plugin>-release-pr."
                 type: string
                 required: true
             package-name:
@@ -335,6 +335,9 @@ jobs:
                       const baseSha = process.env.BASE_SHA;
                       const version = process.env.VERSION;
                       const plugin = process.env.PLUGIN_NAME;
+                      if (!/^[a-z0-9-]+$/.test(plugin)) {
+                        throw new Error(`plugin-name must match [a-z0-9-]+: ${plugin}`);
+                      }
                       const defaultBranch = process.env.DEFAULT_BRANCH;
                       const appSlug = process.env.APP_SLUG;
                       if (appSlug !== process.env.EXPECTED_APP_SLUG) {
