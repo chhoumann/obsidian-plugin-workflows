@@ -1,0 +1,532 @@
+name: Reusable release prepare
+
+# Stage 1 of the forensic PR-to-release pipeline: plan the next version from
+# conventional commits, then open or refresh the single standing release PR.
+# The PR and its commit are authored by the per-repo GitHub App bot so every
+# downstream forensic author check binds to an identity the maintainer controls.
+#
+# The workflow_run trigger that drives this lives in the consumer's caller stub
+# (see templates/caller-workflows/release-prepare.yml); this reusable workflow is
+# invoked via workflow_call and re-confirms the target SHA is still the tip of
+# the default branch, so the stub needs no staleness logic of its own.
+
+on:
+    workflow_call:
+        inputs:
+            plugin-name:
+                description: "Marker-string prefix: <plugin>-release-commit / <plugin>-release-pr."
+                type: string
+                required: true
+            package-name:
+                description: "package.json name field. Defaults to plugin-name."
+                type: string
+                required: false
+                default: ""
+            manifest-id:
+                description: "manifest.json id field. Defaults to plugin-name."
+                type: string
+                required: false
+                default: ""
+            default-branch:
+                description: "Release branch that PRs target."
+                type: string
+                required: false
+                default: master
+            package-manager:
+                description: "npm or pnpm. Drives the release-file set."
+                type: string
+                required: false
+                default: npm
+            node-version:
+                description: "Node.js version for the toolkit install."
+                type: string
+                required: false
+                default: "24"
+            target-sha:
+                description: "Commit to plan from. Empty plans from the default-branch head."
+                type: string
+                required: false
+                default: ""
+            release-bot-app-slug:
+                description: "GitHub App slug; the expected bot login is <slug>[bot]."
+                type: string
+                required: true
+            app-id:
+                description: "GitHub App id (a repository variable value) for the release bot."
+                type: string
+                required: true
+            workflows-repository:
+                description: "Repository holding the release toolkit scripts."
+                type: string
+                required: false
+                default: chhoumann/obsidian-plugin-workflows
+            workflows-ref:
+                description: "Ref of workflows-repository to check out. Keep in sync with the uses: pin."
+                type: string
+                required: false
+                default: v2
+            dry-run:
+                description: "Plan only: compute version + notes, skip opening a PR."
+                type: boolean
+                required: false
+                default: false
+        secrets:
+            release-app-private-key:
+                description: "Private key (PEM) for the release-bot GitHub App."
+                required: true
+
+permissions: {}
+
+concurrency:
+    group: release-prepare-${{ github.repository }}
+    cancel-in-progress: false
+
+jobs:
+    plan:
+        name: Plan release
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        outputs:
+            artifact-name: ${{ steps.plan.outputs.artifact-name }}
+            base-sha: ${{ steps.plan.outputs.base-sha }}
+            release: ${{ steps.plan.outputs.release || 'false' }}
+            release-files: ${{ steps.files.outputs.list }}
+            version: ${{ steps.plan.outputs.version }}
+        steps:
+            - name: Harden Runner
+              uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+              with:
+                  egress-policy: audit
+
+            - name: Resolve target SHA
+              id: target
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+              env:
+                  INPUT_SHA: ${{ inputs.target-sha }}
+                  DEFAULT_BRANCH: ${{ inputs.default-branch }}
+              with:
+                  script: |
+                      let sha = process.env.INPUT_SHA;
+                      if (!sha) {
+                        const { owner, repo } = context.repo;
+                        const ref = await github.rest.git.getRef({
+                          owner,
+                          repo,
+                          ref: `heads/${process.env.DEFAULT_BRANCH}`,
+                        });
+                        sha = ref.data.object.sha;
+                      }
+                      if (!/^[0-9a-f]{40}$/.test(sha)) {
+                        throw new Error(`target SHA must be a full commit SHA: ${sha}`);
+                      }
+                      core.setOutput('sha', sha);
+
+            - name: Checkout tested commit
+              uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+                  ref: ${{ steps.target.outputs.sha }}
+
+            - name: Confirm current default branch
+              id: current
+              env:
+                  TARGET_SHA: ${{ steps.target.outputs.sha }}
+                  DEFAULT_BRANCH: ${{ inputs.default-branch }}
+              run: |
+                  git fetch --no-tags origin "$DEFAULT_BRANCH"
+                  BRANCH_SHA="$(git rev-parse "origin/$DEFAULT_BRANCH")"
+                  if [ "$TARGET_SHA" != "$BRANCH_SHA" ]; then
+                      echo "Skipping stale tested SHA $TARGET_SHA; $DEFAULT_BRANCH is $BRANCH_SHA"
+                      echo "value=false" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+                  echo "value=true" >> "$GITHUB_OUTPUT"
+
+            - name: Classify current commit
+              id: classify
+              if: steps.current.outputs.value == 'true'
+              run: |
+                  if [[ "$(git log -1 --format=%s)" =~ ^release\(version\):\ Release\  ]]; then
+                      echo "release-commit=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "release-commit=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Verify previous release is public
+              if: >-
+                  steps.current.outputs.value == 'true' &&
+                  steps.classify.outputs.release-commit == 'false'
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+              with:
+                  script: |
+                      const fs = require('node:fs');
+                      const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+                      const version = packageJson.version;
+                      if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+                        throw new Error(`Invalid current package version: ${version}`);
+                      }
+                      const { owner, repo } = context.repo;
+                      const releases = await github.paginate(github.rest.repos.listReleases, {
+                        owner,
+                        repo,
+                        per_page: 100,
+                      });
+                      const matches = releases.filter((release) => release.tag_name === version);
+                      if (matches.length !== 1 || matches[0].draft || matches[0].prerelease ||
+                          !matches[0].published_at) {
+                        throw new Error(
+                          `Current version ${version} does not have exactly one published stable GitHub release. ` +
+                          'Recover that release before planning another version.',
+                        );
+                      }
+
+            - name: Checkout release toolkit
+              if: >-
+                  steps.current.outputs.value == 'true' &&
+                  steps.classify.outputs.release-commit == 'false'
+              uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  repository: ${{ inputs.workflows-repository }}
+                  ref: ${{ inputs.workflows-ref }}
+                  path: .release-toolkit
+                  persist-credentials: false
+
+            - name: Setup pnpm
+              if: >-
+                  steps.current.outputs.value == 'true' &&
+                  steps.classify.outputs.release-commit == 'false'
+              uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+              with:
+                  package_json_file: .release-toolkit/package.json
+
+            - name: Setup Node
+              if: >-
+                  steps.current.outputs.value == 'true' &&
+                  steps.classify.outputs.release-commit == 'false'
+              uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  check-latest: true
+
+            - name: Install toolkit dependencies
+              if: >-
+                  steps.current.outputs.value == 'true' &&
+                  steps.classify.outputs.release-commit == 'false'
+              run: pnpm --dir .release-toolkit install --frozen-lockfile --ignore-scripts
+
+            - name: Resolve release file set
+              id: files
+              if: >-
+                  steps.current.outputs.value == 'true' &&
+                  steps.classify.outputs.release-commit == 'false'
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+              run: |
+                  LIST="$(node .release-toolkit/scripts/release-contract.mjs files --package-manager "$PACKAGE_MANAGER" | jq -c '.files')"
+                  echo "list=$LIST" >> "$GITHUB_OUTPUT"
+
+            - name: Compute release plan
+              id: plan
+              if: >-
+                  steps.current.outputs.value == 'true' &&
+                  steps.classify.outputs.release-commit == 'false'
+              env:
+                  TARGET_SHA: ${{ steps.target.outputs.sha }}
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+              run: |
+                  PLAN="$RUNNER_TEMP/release-plan.json"
+                  NOTES="$RUNNER_TEMP/release-notes.md"
+                  node .release-toolkit/scripts/release-plan.mjs \
+                    --cwd . \
+                    --package-manager "$PACKAGE_MANAGER" \
+                    --output "$PLAN" \
+                    --notes-output "$NOTES"
+                  test "$(jq -r '.baseSha' "$PLAN")" = "$TARGET_SHA"
+                  RELEASE="$(jq -r '.release' "$PLAN")"
+                  echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+                  echo "base-sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+                  if [ "$RELEASE" != "true" ]; then
+                      echo "No releasable conventional commits since the last tag."
+                      exit 0
+                  fi
+
+                  VERSION="$(jq -r '.nextVersion' "$PLAN")"
+                  CURRENT_VERSION="$(node -p 'require("./package.json").version')"
+                  PREVIOUS_VERSION="$(jq -r '.previousVersion' "$PLAN")"
+                  test "$CURRENT_VERSION" = "$PREVIOUS_VERSION"
+                  if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                      echo "Invalid planned version: $VERSION" >&2
+                      exit 1
+                  fi
+                  OUTPUT="$RUNNER_TEMP/release-version-files"
+                  node .release-toolkit/scripts/release-contract.mjs materialize \
+                    --root . \
+                    --out "$OUTPUT" \
+                    --version "$VERSION" \
+                    --base-sha "$TARGET_SHA" \
+                    --package-manager "$PACKAGE_MANAGER"
+                  cp "$NOTES" "$OUTPUT/release-notes.md"
+                  ARTIFACT_NAME="release-version-files-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+                  echo "artifact-name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+                  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+                  echo "Planned release $VERSION from $TARGET_SHA."
+                  echo "::group::Release notes"
+                  cat "$NOTES"
+                  echo "::endgroup::"
+
+            - name: Upload version-file plan
+              if: steps.plan.outputs.release == 'true'
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: ${{ steps.plan.outputs.artifact-name }}
+                  path: ${{ runner.temp }}/release-version-files
+                  if-no-files-found: error
+                  retention-days: 1
+
+    open-pr:
+        name: Open release PR
+        needs: plan
+        if: needs.plan.outputs.release == 'true' && inputs.dry-run == false
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            pull-requests: write
+        steps:
+            - name: Harden Runner
+              uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+              with:
+                  egress-policy: audit
+
+            - name: Download version-file plan
+              uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+              with:
+                  name: ${{ needs.plan.outputs.artifact-name }}
+                  path: release-version-files
+
+            - name: Generate release-bot token
+              id: app-token
+              uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+              with:
+                  app-id: ${{ inputs.app-id }}
+                  private-key: ${{ secrets.release-app-private-key }}
+                  permission-contents: write
+                  permission-pull-requests: write
+
+            - name: Create or refresh release branch and PR
+              uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+              env:
+                  BASE_SHA: ${{ needs.plan.outputs.base-sha }}
+                  VERSION: ${{ needs.plan.outputs.version }}
+                  RELEASE_FILES: ${{ needs.plan.outputs.release-files }}
+                  PLUGIN_NAME: ${{ inputs.plugin-name }}
+                  DEFAULT_BRANCH: ${{ inputs.default-branch }}
+                  APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+                  EXPECTED_APP_SLUG: ${{ inputs.release-bot-app-slug }}
+              with:
+                  github-token: ${{ steps.app-token.outputs.token }}
+                  script: |
+                      const crypto = require('node:crypto');
+                      const fs = require('node:fs');
+                      const path = require('node:path');
+
+                      const baseSha = process.env.BASE_SHA;
+                      const version = process.env.VERSION;
+                      const plugin = process.env.PLUGIN_NAME;
+                      const defaultBranch = process.env.DEFAULT_BRANCH;
+                      const appSlug = process.env.APP_SLUG;
+                      if (appSlug !== process.env.EXPECTED_APP_SLUG) {
+                        throw new Error(
+                          `Minted App slug ${appSlug} does not match release-bot-app-slug ${process.env.EXPECTED_APP_SLUG}.`,
+                        );
+                      }
+                      const botLogin = `${appSlug}[bot]`;
+                      const expectedFiles = JSON.parse(process.env.RELEASE_FILES).slice().sort();
+                      const root = path.resolve('release-version-files');
+                      const metadataPath = path.join(root, 'release-version-files.json');
+                      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+                      if (!/^[0-9a-f]{40}$/.test(baseSha) || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+                        throw new Error('Invalid release plan identity.');
+                      }
+                      if (metadata.schemaVersion !== 1 || metadata.baseSha !== baseSha || metadata.version !== version) {
+                        throw new Error('Release artifact metadata does not match workflow outputs.');
+                      }
+                      if (!Array.isArray(metadata.files) || metadata.files.length !== expectedFiles.length) {
+                        throw new Error('Release artifact metadata has an invalid file list.');
+                      }
+
+                      const { owner, repo } = context.repo;
+                      const { data: botUser } = await github.rest.users.getByUsername({ username: botLogin });
+                      const botEmail = `${botUser.id}+${botLogin}@users.noreply.github.com`;
+
+                      const fileEntries = [];
+                      for (const name of expectedFiles) {
+                        const entry = metadata.files.find((candidate) => candidate.name === name);
+                        const filePath = path.join(root, name);
+                        const stat = fs.lstatSync(filePath);
+                        if (!entry || !stat.isFile() || stat.isSymbolicLink()) {
+                          throw new Error(`Invalid release artifact: ${name}`);
+                        }
+                        const contents = fs.readFileSync(filePath);
+                        const digest = crypto.createHash('sha256').update(contents).digest('hex');
+                        if (entry.sha256 !== digest || entry.size !== contents.byteLength) {
+                          throw new Error(`Release artifact digest mismatch: ${name}`);
+                        }
+                        fileEntries.push({ name, contents });
+                      }
+                      const metadataNames = metadata.files.map((entry) => entry.name).sort();
+                      if (JSON.stringify(metadataNames) !== JSON.stringify(expectedFiles)) {
+                        throw new Error('Release artifact metadata contains unexpected paths.');
+                      }
+
+                      const branchHead = await github.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
+                      if (branchHead.data.object.sha !== baseSha) {
+                        throw new Error(`${defaultBranch} moved from ${baseSha} to ${branchHead.data.object.sha}; rerun release planning.`);
+                      }
+                      const baseCommit = await github.rest.git.getCommit({ owner, repo, commit_sha: baseSha });
+                      const treeItems = [];
+                      for (const file of fileEntries) {
+                        const blob = await github.rest.git.createBlob({
+                          owner,
+                          repo,
+                          content: file.contents.toString('base64'),
+                          encoding: 'base64',
+                        });
+                        treeItems.push({ path: file.name, mode: '100644', type: 'blob', sha: blob.data.sha });
+                      }
+                      const tree = await github.rest.git.createTree({
+                        owner,
+                        repo,
+                        base_tree: baseCommit.data.tree.sha,
+                        tree: treeItems,
+                      });
+                      const title = `release(version): Release ${version}`;
+                      const commitMarker = `${plugin}-release-commit schema=1 version=${version} base=${baseSha}`;
+                      const commit = await github.rest.git.createCommit({
+                        owner,
+                        repo,
+                        message: `${title}\n\n${commitMarker}`,
+                        tree: tree.data.sha,
+                        parents: [baseSha],
+                        author: { name: botLogin, email: botEmail },
+                        committer: { name: botLogin, email: botEmail },
+                      });
+                      const branch = `release/${version}`;
+                      const ref = `heads/${branch}`;
+                      let existingRef;
+                      try {
+                        existingRef = await github.rest.git.getRef({ owner, repo, ref });
+                      } catch (error) {
+                        if (error.status !== 404) throw error;
+                      }
+
+                      const openPulls = await github.paginate(github.rest.pulls.list, {
+                        owner,
+                        repo,
+                        state: 'open',
+                        head: `${owner}:${branch}`,
+                        per_page: 100,
+                      });
+                      if (openPulls.length > 1) throw new Error(`Multiple open PRs exist for ${branch}.`);
+                      let pullToUpdate = openPulls[0];
+                      if (existingRef) {
+                        const existingCommit = await github.rest.repos.getCommit({
+                          owner,
+                          repo,
+                          ref: existingRef.data.object.sha,
+                        });
+                        const existingFiles = (existingCommit.data.files || []).map((file) => file.filename).sort();
+                        if (existingCommit.data.parents.length !== 1 ||
+                            existingCommit.data.commit.message.trim() !==
+                              `${title}\n\n${plugin}-release-commit schema=1 version=${version} ` +
+                              `base=${existingCommit.data.parents[0].sha}` ||
+                            existingCommit.data.commit.author.email !== botEmail ||
+                            !(existingCommit.data.files || []).every((file) => file.status === 'modified') ||
+                            JSON.stringify(existingFiles) !== JSON.stringify(expectedFiles)) {
+                          throw new Error(`Refusing to overwrite non-generated branch ${branch}.`);
+                        }
+                        if (!pullToUpdate) {
+                          const closedPulls = await github.paginate(github.rest.pulls.list, {
+                            owner,
+                            repo,
+                            state: 'closed',
+                            head: `${owner}:${branch}`,
+                            per_page: 100,
+                          });
+                          const matching = closedPulls.filter(
+                            (pull) => pull.head.sha === existingRef.data.object.sha,
+                          );
+                          if (matching.length > 1) {
+                            throw new Error(`Release branch ${branch} has multiple matching closed PRs.`);
+                          }
+                          if (matching[0]) {
+                            const closed = await github.rest.pulls.get({ owner, repo, pull_number: matching[0].number });
+                            if (closed.data.merged) {
+                              throw new Error(`Refusing to reuse merged release branch ${branch}.`);
+                            }
+                            pullToUpdate = closed.data;
+                          }
+                        }
+                        if (pullToUpdate) {
+                          if (pullToUpdate.user?.login !== botLogin ||
+                              pullToUpdate.base.ref !== defaultBranch ||
+                              pullToUpdate.head.repo?.full_name !== `${owner}/${repo}` ||
+                              pullToUpdate.head.ref !== branch ||
+                              pullToUpdate.head.sha !== existingRef.data.object.sha) {
+                            throw new Error(`Refusing to overwrite release branch ${branch} without exact PR provenance.`);
+                          }
+                          if (pullToUpdate.state === 'closed') {
+                            await github.rest.git.deleteRef({ owner, repo, ref });
+                            existingRef = undefined;
+                            pullToUpdate = undefined;
+                          } else if (!pullToUpdate.draft) {
+                            await github.graphql(
+                              `mutation ConvertReleasePrToDraft($id: ID!) {
+                                  convertPullRequestToDraft(input: { pullRequestId: $id }) {
+                                    pullRequest { isDraft }
+                                  }
+                                }`,
+                              { id: pullToUpdate.node_id },
+                            );
+                          }
+                        }
+                        if (existingRef) {
+                          await github.rest.git.updateRef({ owner, repo, ref, sha: commit.data.sha, force: true });
+                        }
+                      }
+                      if (!existingRef) {
+                        await github.rest.git.createRef({ owner, repo, ref: `refs/${ref}`, sha: commit.data.sha });
+                      }
+
+                      const body = [
+                        `Prepare ${plugin} ${version} from tested ${defaultBranch} commit \`${baseSha}\`.`,
+                        '',
+                        'This machine-generated PR changes only the synchronized version files.',
+                        'Merge it manually after the required checks pass.',
+                        '',
+                        `<!-- ${plugin}-release-pr schema=1 version=${version} base=${baseSha} -->`,
+                      ].join('\n');
+                      let pull;
+                      if (pullToUpdate) {
+                        pull = await github.rest.pulls.update({
+                          owner,
+                          repo,
+                          pull_number: pullToUpdate.number,
+                          base: defaultBranch,
+                          title,
+                          body,
+                        });
+                      } else {
+                        pull = await github.rest.pulls.create({
+                          owner,
+                          repo,
+                          base: defaultBranch,
+                          head: branch,
+                          title,
+                          body,
+                          draft: true,
+                        });
+                      }
+                      core.notice(`Release PR #${pull.data.number}: ${pull.data.html_url}`);
