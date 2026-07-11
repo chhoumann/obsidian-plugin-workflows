@@ -1,0 +1,16 @@
+{
+	"name": "obsidian-plugin-workflows",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Reusable GitHub Actions workflows and forensic release toolkit for Obsidian plugin repos.",
+	"type": "module",
+	"scripts": {
+		"test": "node --test 'scripts/*.test.mjs'"
+	},
+	"license": "MIT",
+	"devDependencies": {
+		"@semantic-release/commit-analyzer": "13.0.1",
+		"@semantic-release/release-notes-generator": "14.1.1"
+	},
+	"packageManager": "pnpm@10.32.1"
+}
