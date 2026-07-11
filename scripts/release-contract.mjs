@@ -69,6 +69,19 @@ export function assertReleaseVersion(value) {
 }
 
 /**
+ * Obsidian's manifest.minAppVersion (and every versions.json value) is a stable
+ * semantic version. Asserting the shape lets the release gate compare floors.
+ * @param {unknown} value
+ * @param {string} label
+ */
+export function assertMinAppVersion(value, label) {
+	if (typeof value !== "string" || !SEMVER_PATTERN.test(value)) {
+		throw new Error(`${label} minAppVersion must be a stable semantic version.`);
+	}
+	return value;
+}
+
+/**
  * @param {string} root
  * @param {string} fileName
  * @param {ReturnType<typeof resolveReleaseConfig>} config
@@ -305,6 +318,13 @@ export function validateVersionFiles(options) {
 	if (compareVersions(version, baseVersion) <= 0) {
 		throw new Error(`Release version ${version} must be newer than ${baseVersion}.`);
 	}
+	const baseMinAppVersion = assertMinAppVersion(baseManifest.minAppVersion, "base");
+	const nextMinAppVersion = assertMinAppVersion(nextManifest.minAppVersion, "candidate");
+	if (compareVersions(nextMinAppVersion, baseMinAppVersion) < 0) {
+		throw new Error(
+			`Release minAppVersion ${nextMinAppVersion} must not be lower than base ${baseMinAppVersion}.`,
+		);
+	}
 	if (baseVersions[baseVersion] !== baseManifest.minAppVersion) {
 		throw new Error("Base versions.json is not synchronized with its manifest.");
 	}
@@ -340,6 +360,36 @@ export function validateVersionFiles(options) {
 		throw new Error("versions.json changed outside the new release entry.");
 	}
 	return { version };
+}
+
+/**
+ * Cross-checks the base of a release against the previous published tag: the
+ * compatibility floor may only rise, and the recorded version history must be
+ * byte-identical (versions.json is append-only and only a release PR touches it,
+ * so between two releases it cannot change). Defends against silent rewrites of
+ * old history or a lowered minAppVersion slipped in between releases.
+ * @param {{ previousRoot: string; baseRoot: string; config: ReturnType<typeof resolveReleaseConfig> }} options
+ */
+export function validatePreviousTagHistory(options) {
+	const config = options.config;
+	const previousManifest = readJson(options.previousRoot, "manifest.json", config);
+	const baseManifest = readJson(options.baseRoot, "manifest.json", config);
+	const previousVersions = readJson(options.previousRoot, "versions.json", config);
+	const baseVersions = readJson(options.baseRoot, "versions.json", config);
+	const previousMinAppVersion = assertMinAppVersion(
+		previousManifest.minAppVersion,
+		"previous tag",
+	);
+	const baseMinAppVersion = assertMinAppVersion(baseManifest.minAppVersion, "base");
+	if (compareVersions(baseMinAppVersion, previousMinAppVersion) < 0) {
+		throw new Error(
+			`Base minAppVersion ${baseMinAppVersion} must not be lower than previous release ${previousMinAppVersion}.`,
+		);
+	}
+	if (!isDeepStrictEqual(previousVersions, baseVersions)) {
+		throw new Error("versions.json history diverges from the previous release tag.");
+	}
+	return { baseMinAppVersion, previousMinAppVersion };
 }
 
 /**
@@ -446,6 +496,12 @@ async function main() {
 			candidateRoot: requiredOption(options, "candidate-root"),
 			config: configFromOptions(options),
 			version: requiredOption(options, "version"),
+		});
+	} else if (command === "validate-previous-tag") {
+		result = validatePreviousTagHistory({
+			baseRoot: requiredOption(options, "base-root"),
+			config: configFromOptions(options),
+			previousRoot: requiredOption(options, "previous-root"),
 		});
 	} else if (command === "validate-pr") {
 		const input = JSON.parse(readRegularFile(requiredOption(options, "input")).toString("utf8"));

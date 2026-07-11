@@ -91,6 +91,25 @@ jobs:
                   script: |
                       const { isDeepStrictEqual } = require('node:util');
 
+                      // Bounded retry for read-only forensic calls: a transient 5xx from the
+                      // API must not abandon a release the maintainer already merged.
+                      async function retryRead(thunk) {
+                        let lastError;
+                        for (let attempt = 0; attempt < 4; attempt += 1) {
+                          try {
+                            return await thunk();
+                          } catch (error) {
+                            const status = error?.status ?? 0;
+                            if (status < 500 || status > 599) throw error;
+                            lastError = error;
+                            if (attempt < 3) {
+                              await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+                            }
+                          }
+                        }
+                        throw lastError;
+                      }
+
                       const plugin = process.env.PLUGIN_NAME;
                       if (!/^[a-z0-9-]+$/.test(plugin)) {
                         throw new Error(`plugin-name must match [a-z0-9-]+: ${plugin}`);
@@ -111,7 +130,8 @@ jobs:
                         throw new Error('Release event has an invalid PR number.');
                       }
 
-                      const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+                      const { data: pull } = await retryRead(() =>
+                        github.rest.pulls.get({ owner, repo, pull_number: pullNumber }));
                       if (!pull.merged || pull.state !== 'closed' || !pull.merged_at || !pull.merge_commit_sha) {
                         throw new Error(`PR #${pullNumber} is not merged.`);
                       }
@@ -138,18 +158,19 @@ jobs:
                       if (!marker) throw new Error(`PR #${pullNumber} is missing valid release provenance.`);
                       const baseSha = marker[1];
 
-                      const files = await github.paginate(github.rest.pulls.listFiles, {
+                      const files = await retryRead(() => github.paginate(github.rest.pulls.listFiles, {
                         owner,
                         repo,
                         pull_number: pullNumber,
                         per_page: 100,
-                      });
+                      }));
                       const changedFiles = files.map((file) => file.filename).sort();
                       if (JSON.stringify(changedFiles) !== JSON.stringify(expectedFiles)) {
                         throw new Error(`PR #${pullNumber} must change exactly the synchronized version files.`);
                       }
 
-                      const headCommit = await github.rest.git.getCommit({ owner, repo, commit_sha: pull.head.sha });
+                      const headCommit = await retryRead(() =>
+                        github.rest.git.getCommit({ owner, repo, commit_sha: pull.head.sha }));
                       if (headCommit.data.parents.length !== 1 || headCommit.data.parents[0].sha !== baseSha) {
                         throw new Error(`PR #${pullNumber} head does not descend directly from its recorded base.`);
                       }
@@ -159,7 +180,8 @@ jobs:
                       }
 
                       const releaseSha = pull.merge_commit_sha;
-                      const releaseCommit = await github.rest.git.getCommit({ owner, repo, commit_sha: releaseSha });
+                      const releaseCommit = await retryRead(() =>
+                        github.rest.git.getCommit({ owner, repo, commit_sha: releaseSha }));
                       if (releaseCommit.data.parents.length !== 1 || releaseCommit.data.parents[0].sha !== baseSha) {
                         throw new Error(`PR #${pullNumber} was not squash-merged directly onto its recorded base.`);
                       }
@@ -225,7 +247,8 @@ jobs:
                       }
 
                       async function readJsonAt(ref, file) {
-                        const response = await github.rest.repos.getContent({ owner, repo, path: file, ref });
+                        const response = await retryRead(() =>
+                          github.rest.repos.getContent({ owner, repo, path: file, ref }));
                         const data = response.data;
                         if (Array.isArray(data) || data.type !== 'file' || data.encoding !== 'base64' ||
                             typeof data.content !== 'string') {
@@ -286,12 +309,13 @@ jobs:
                         throw new Error('versions.json changed outside the new release entry.');
                       }
 
-                      const branchHead = await github.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
-                      const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                      const branchHead = await retryRead(() =>
+                        github.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` }));
+                      const comparison = await retryRead(() => github.rest.repos.compareCommitsWithBasehead({
                         owner,
                         repo,
                         basehead: `${releaseSha}...${branchHead.data.object.sha}`,
-                      });
+                      }));
                       if (!['ahead', 'identical'].includes(comparison.data.status) ||
                           comparison.data.merge_base_commit.sha !== releaseSha) {
                         throw new Error(`Release commit ${releaseSha} is not on current ${defaultBranch}.`);
@@ -300,14 +324,16 @@ jobs:
                       async function resolveTagCommit(tag) {
                         let reference;
                         try {
-                          reference = await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` });
+                          reference = await retryRead(() =>
+                            github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` }));
                         } catch (error) {
                           if (error.status === 404) return null;
                           throw error;
                         }
                         let object = reference.data.object;
                         for (let depth = 0; object.type === 'tag' && depth < 5; depth += 1) {
-                          const annotated = await github.rest.git.getTag({ owner, repo, tag_sha: object.sha });
+                          const annotated = await retryRead(() =>
+                            github.rest.git.getTag({ owner, repo, tag_sha: object.sha }));
                           object = annotated.data.object;
                         }
                         if (object.type !== 'commit') {
@@ -326,11 +352,24 @@ jobs:
                           tag.versions[baseVersion] !== tag.manifest.minAppVersion) {
                         throw new Error(`Previous release tag ${baseVersion} has invalid version metadata.`);
                       }
-                      const previousComparison = await github.rest.repos.compareCommitsWithBasehead({
-                        owner,
-                        repo,
-                        basehead: `${previousTagSha}...${baseSha}`,
-                      });
+                      // The compatibility floor may only rise, and version history is append-only
+                      // between releases (only a release PR edits versions.json). versionParts
+                      // inside compareVersions also asserts both minAppVersions are stable semver.
+                      if (compareVersions(base.manifest.minAppVersion, tag.manifest.minAppVersion) < 0) {
+                        throw new Error(
+                          `Base minAppVersion ${base.manifest.minAppVersion} must not be lower than ` +
+                          `previous release ${tag.manifest.minAppVersion}.`,
+                        );
+                      }
+                      if (!isDeepStrictEqual(tag.versions, base.versions)) {
+                        throw new Error('versions.json history diverges from the previous release tag.');
+                      }
+                      const previousComparison = await retryRead(() =>
+                        github.rest.repos.compareCommitsWithBasehead({
+                          owner,
+                          repo,
+                          basehead: `${previousTagSha}...${baseSha}`,
+                        }));
                       if (!['ahead', 'identical'].includes(previousComparison.data.status) ||
                           previousComparison.data.merge_base_commit.sha !== previousTagSha) {
                         throw new Error(`Previous release tag ${baseVersion} is not an ancestor of the base.`);
@@ -344,7 +383,8 @@ jobs:
                       const runBranch = `release-run/${version}`;
                       let runRef;
                       try {
-                        runRef = await github.rest.git.getRef({ owner, repo, ref: `heads/${runBranch}` });
+                        runRef = await retryRead(() =>
+                          github.rest.git.getRef({ owner, repo, ref: `heads/${runBranch}` }));
                       } catch (error) {
                         if (error.status !== 404) throw error;
                       }

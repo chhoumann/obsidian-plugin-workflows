@@ -9,6 +9,7 @@ import {
 	materializeVersionFiles,
 	resolveReleaseConfig,
 	validateCurrentVersionFiles,
+	validatePreviousTagHistory,
 	validateReleasePr,
 	validateVersionFiles,
 } from "./release-contract.mjs";
@@ -229,6 +230,81 @@ describe("release version contract (npm-only mutations)", () => {
 			);
 		});
 	}
+});
+
+describe("minAppVersion floor", () => {
+	it("rejects a candidate minAppVersion below the base", async () => {
+		const root = await makeTempRoot("floor-base");
+		const out = await makeTempRoot("floor-candidate");
+		await writeVersionFixture(root, npmConfig);
+		materializeVersionFiles({ baseSha: BASE_SHA, config: npmConfig, out, root, version: "2.17.4" });
+		const manifest = JSON.parse(await fs.readFile(path.join(out, "manifest.json"), "utf8"));
+		manifest.minAppVersion = "0.9.0";
+		await writeJson(path.join(out, "manifest.json"), manifest);
+		assert.throws(
+			() => validateVersionFiles({ baseRoot: root, candidateRoot: out, config: npmConfig, version: "2.17.4" }),
+			/must not be lower than base/,
+		);
+	});
+
+	it("rejects a non-semver minAppVersion", async () => {
+		const root = await makeTempRoot("floor-shape-base");
+		const out = await makeTempRoot("floor-shape-candidate");
+		await writeVersionFixture(root, npmConfig);
+		materializeVersionFiles({ baseSha: BASE_SHA, config: npmConfig, out, root, version: "2.17.4" });
+		const manifest = JSON.parse(await fs.readFile(path.join(out, "manifest.json"), "utf8"));
+		manifest.minAppVersion = "1.0";
+		await writeJson(path.join(out, "manifest.json"), manifest);
+		assert.throws(
+			() => validateVersionFiles({ baseRoot: root, candidateRoot: out, config: npmConfig, version: "2.17.4" }),
+			/stable semantic version/,
+		);
+	});
+});
+
+describe("previous tag history", () => {
+	async function writeTagFixture(root, { minAppVersion = "1.0.0", versions } = {}) {
+		await fs.mkdir(root, { recursive: true });
+		await writeJson(path.join(root, "manifest.json"), {
+			id: "podnotes",
+			minAppVersion,
+			version: "2.17.3",
+		});
+		await writeJson(path.join(root, "versions.json"), versions ?? { "2.17.3": minAppVersion });
+	}
+
+	it("accepts an unchanged history and a non-decreasing floor", async () => {
+		const previous = await makeTempRoot("prev-ok");
+		const base = await makeTempRoot("base-ok");
+		await writeTagFixture(previous, { minAppVersion: "1.0.0" });
+		await writeTagFixture(base, { minAppVersion: "1.0.0" });
+		assert.deepEqual(
+			validatePreviousTagHistory({ previousRoot: previous, baseRoot: base, config: npmConfig }),
+			{ baseMinAppVersion: "1.0.0", previousMinAppVersion: "1.0.0" },
+		);
+	});
+
+	it("rejects a base minAppVersion below the previous tag", async () => {
+		const previous = await makeTempRoot("prev-floor");
+		const base = await makeTempRoot("base-floor");
+		await writeTagFixture(previous, { minAppVersion: "1.5.0", versions: { "2.17.3": "1.0.0" } });
+		await writeTagFixture(base, { minAppVersion: "1.4.0", versions: { "2.17.3": "1.0.0" } });
+		assert.throws(
+			() => validatePreviousTagHistory({ previousRoot: previous, baseRoot: base, config: npmConfig }),
+			/must not be lower than previous release/,
+		);
+	});
+
+	it("rejects rewritten version history", async () => {
+		const previous = await makeTempRoot("prev-history");
+		const base = await makeTempRoot("base-history");
+		await writeTagFixture(previous, { versions: { "2.17.3": "1.0.0" } });
+		await writeTagFixture(base, { versions: { "2.17.3": "1.0.0", "2.16.0": "0.9.0" } });
+		assert.throws(
+			() => validatePreviousTagHistory({ previousRoot: previous, baseRoot: base, config: npmConfig }),
+			/history diverges from the previous release tag/,
+		);
+	});
 });
 
 describe("release version helpers", () => {
