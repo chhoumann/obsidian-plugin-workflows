@@ -92,7 +92,13 @@ function assertMatchObject(actual, expected) {
 }
 
 afterEach(async () => {
-	await Promise.all(tempRoots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
+	// git commit can leave a detached auto-gc touching .git while rm walks it;
+	// retries absorb the resulting transient ENOTEMPTY.
+	await Promise.all(
+		tempRoots
+			.splice(0)
+			.map((root) => fs.rm(root, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 })),
+	);
 });
 
 describe("release plan", () => {

@@ -54,7 +54,11 @@ async function writeVersionFixture(root, config, version = "2.17.3") {
 }
 
 afterEach(async () => {
-	await Promise.all(tempRoots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
+	await Promise.all(
+		tempRoots
+			.splice(0)
+			.map((root) => fs.rm(root, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 })),
+	);
 });
 
 describe("release config", () => {
