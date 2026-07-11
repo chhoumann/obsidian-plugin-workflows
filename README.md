@@ -159,7 +159,9 @@ trigger + `uses:`; all logic lives in the reusables here.
 
 A caller stub sets the token ceiling with a top-level or per-job `permissions:`
 that grants the union its reusable needs; the reusable scopes each job down from
-there. Copy the stubs, pin `@v3`, and set `workflows-ref: v3` to match the pin.
+there. Copy the stubs and pin `@v4`; the toolkit scripts are checked out from
+the reusable workflow's own commit (`job.workflow_repository` /
+`job.workflow_sha`), so the `uses:` ref is the single version pin.
 
 ### Inputs
 
@@ -173,7 +175,6 @@ Shared across all three reusables:
 | `default-branch` | `master` | Branch release PRs target. |
 | `package-manager` | `npm` | `npm` or `pnpm`; drives the release-file set (npm syncs `package-lock.json`, pnpm has no lockfile in the set). |
 | `release-bot-app-slug` | (required) | App slug; the expected bot login is `<slug>[bot]`. |
-| `workflows-repository` / `workflows-ref` | `chhoumann/obsidian-plugin-workflows` / `v3` | Where and at what ref the release toolkit scripts are checked out. |
 
 `release-prepare.yml` adds: `target-sha` (empty = default-branch head),
 `node-version`, `release-policy` (below), `app-id` (a repo **variable** value),
@@ -300,6 +301,12 @@ workflow state.
   release** as above. Re-running an already-published version is safe: the
   publisher verifies the existing release byte-for-byte and finishes without
   mutating it.
+- **A release cut under an older `release-policy`** (e.g. before chore commits
+  stopped releasing) fails the release stage's plan recompute with "Release
+  plan version is none" - fail-closed, since the current policy would never
+  have produced that version. To rebuild such a release, temporarily set the
+  `release-policy` in the release stub to the rules that were in force when it
+  was cut.
 
 ### Migration checklist (release pipeline)
 
@@ -314,10 +321,9 @@ workflow state.
    `package-manager`, `release-policy`, `default-branch`, `node-version`,
    `release-bot-app-slug`, `release-assets` (add `styles.css` if the plugin
    ships one), and `verify-commands` to match the repo's scripts.
-   - **Two pins move together:** the `uses: ...@v3` ref and the `workflows-ref`
-     input on all three stubs both select this repo's version - bump them in
-     lockstep (Dependabot bumps the `uses:` pin; update `workflows-ref` to
-     match).
+   - **One pin:** the `uses: ...@v4` ref selects this repo's version for the
+     workflow AND its toolkit scripts (checked out from the reusable workflow's
+     own commit), so Dependabot SHA bumps are always self-consistent.
    - **If the default branch is not `master`,** the literal appears in **five
      places** across the three stubs: the `default-branch:` input in all three,
      plus the `if:` gate in `release-prepare.yml` (`head_branch == 'master'`) and
@@ -354,7 +360,7 @@ kept fresh by Dependabot in the source repos and reused here verbatim:
 | `rtCamp/action-slack-notify` | v2.4.0 | `33ca3be66c6f378fe1610fd1d5258632dbed5e58` |
 
 Add this repo's `github-actions` ecosystem to each consumer's Dependabot so the
-`@v1`/`@v2`/SHA pins here get bumped like any other action.
+`@v1`/`@v4`/SHA pins here get bumped like any other action.
 
 ## Templates
 

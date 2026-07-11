@@ -57,7 +57,7 @@ deps) match the Conventional Commit types the release toolkit expects. Add extra
 ## `caller-workflows/`
 
 Minimal stubs that consume the reusable workflows in this repo. Copy each into
-your repo's `.github/workflows/` and pin `@v1`/`@v3` (or a commit SHA). They
+your repo's `.github/workflows/` and pin `@v1`/`@v4` (or a commit SHA). They
 encode the triggers that CANNOT live in the reusable workflow.
 
 CI and quality:

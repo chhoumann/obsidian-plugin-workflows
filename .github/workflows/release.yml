@@ -91,16 +91,6 @@ on:
                 type: string
                 required: false
                 default: ""
-            workflows-repository:
-                description: "Repository holding the release toolkit scripts."
-                type: string
-                required: false
-                default: chhoumann/obsidian-plugin-workflows
-            workflows-ref:
-                description: "Ref of workflows-repository to check out. Keep in sync with the uses: pin."
-                type: string
-                required: false
-                default: v3
         secrets:
             slack-webhook:
                 description: "Optional Slack incoming webhook for the notify job."
@@ -313,8 +303,10 @@ jobs:
             - name: Checkout release toolkit
               uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
               with:
-                  repository: ${{ inputs.workflows-repository }}
-                  ref: ${{ inputs.workflows-ref }}
+                  # The reusable workflow's own commit: toolkit scripts always come
+                  # from exactly the ref the caller pinned in `uses:`.
+                  repository: ${{ job.workflow_repository }}
+                  ref: ${{ job.workflow_sha }}
                   path: .release-toolkit
                   persist-credentials: false
 
@@ -737,9 +729,10 @@ jobs:
                   GH_TOKEN: ${{ github.token }}
                   SOURCE_REF: ${{ needs.resolve.outputs.source-ref }}
                   RELEASE_ASSETS: ${{ inputs.release-assets }}
-                  WORKFLOWS_REPOSITORY: ${{ inputs.workflows-repository }}
+                  SIGNER_REPOSITORY: ${{ job.workflow_repository }}
+                  SIGNER_PATH: ${{ job.workflow_file_path }}
               run: |
-                  SIGNER_WORKFLOW="github.com/${WORKFLOWS_REPOSITORY}/.github/workflows/release.yml"
+                  SIGNER_WORKFLOW="github.com/${SIGNER_REPOSITORY}/${SIGNER_PATH}"
                   echo "$RELEASE_ASSETS" | jq -r '.[]' | while IFS= read -r ASSET; do
                       [ -z "$ASSET" ] && continue
                       gh attestation verify "release-payload/$ASSET" \
