@@ -1,9 +1,10 @@
 name: Reusable release prepare
 
 # Stage 1 of the forensic PR-to-release pipeline: plan the next version from
-# conventional commits, then open or refresh the single standing release PR.
-# The PR and its commit are authored by the per-repo GitHub App bot so every
-# downstream forensic author check binds to an identity the maintainer controls.
+# conventional commits, then open or refresh the single standing release PR,
+# closing any old-version release PR the new plan supersedes. The PR and its
+# commit are authored by the per-repo GitHub App bot so every downstream
+# forensic author check binds to an identity the maintainer controls.
 #
 # The workflow_run trigger that drives this lives in the consumer's caller stub
 # (see templates/caller-workflows/release-prepare.yml); this reusable workflow is
@@ -552,3 +553,59 @@ jobs:
                         });
                       }
                       core.notice(`Release PR #${pull.data.number}: ${pull.data.html_url}`);
+
+                      // A version bump while a release PR stands (a fix-series PR is open,
+                      // then a feat lands and the plan becomes the next minor) moves the
+                      // standing PR to a new release/<version> branch. The old-version PR
+                      // can never merge again - its recorded base is no longer the branch
+                      // head - so close it to keep exactly one standing release PR.
+                      const stalePulls = (await github.paginate(github.rest.pulls.list, {
+                        owner,
+                        repo,
+                        state: 'open',
+                        base: defaultBranch,
+                        per_page: 100,
+                      })).filter((candidate) =>
+                        candidate.number !== pull.data.number &&
+                        /^release\/(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(candidate.head.ref));
+                      for (const stale of stalePulls) {
+                        const staleVersion = stale.head.ref.slice('release/'.length);
+                        const staleMarker = new RegExp(
+                          `<!-- ${plugin}-release-pr schema=1 version=${staleVersion.replaceAll('.', '\\.')}` +
+                          ' base=[0-9a-f]{40} -->',
+                        );
+                        if (stale.user?.login !== botLogin ||
+                            stale.head.repo?.full_name !== `${owner}/${repo}` ||
+                            !staleMarker.test(stale.body || '')) {
+                          core.warning(
+                            `Leaving PR #${stale.number} open: it uses the release branch ` +
+                            'namespace but is not a generated release PR.',
+                          );
+                          continue;
+                        }
+                        const staleCommit = await github.rest.repos.getCommit({ owner, repo, ref: stale.head.sha });
+                        const staleFiles = (staleCommit.data.files || []).map((file) => file.filename).sort();
+                        if (staleCommit.data.parents.length !== 1 ||
+                            staleCommit.data.commit.message.trim() !==
+                              `release(version): Release ${staleVersion}\n\n${plugin}-release-commit ` +
+                              `schema=1 version=${staleVersion} base=${staleCommit.data.parents[0].sha}` ||
+                            staleCommit.data.commit.author.email !== botEmail ||
+                            !(staleCommit.data.files || []).every((file) => file.status === 'modified') ||
+                            JSON.stringify(staleFiles) !== JSON.stringify(expectedFiles)) {
+                          throw new Error(
+                            `Refusing to supersede PR #${stale.number}: branch ${stale.head.ref} ` +
+                            'is not machine-generated. Triage it manually, then rerun release preparation.',
+                          );
+                        }
+                        await github.rest.issues.createComment({
+                          owner,
+                          repo,
+                          issue_number: stale.number,
+                          body: `Superseded by release PR #${pull.data.number}: the release plan ` +
+                            `for the current ${defaultBranch} head is version ${version}, ` +
+                            `not ${staleVersion}.`,
+                        });
+                        await github.rest.pulls.update({ owner, repo, pull_number: stale.number, state: 'closed' });
+                        await github.rest.git.deleteRef({ owner, repo, ref: `heads/${stale.head.ref}` });
+                        core.notice(`Closed superseded release PR #${stale.number} (${staleVersion}) and deleted ${stale.head.ref}.`);
+                      }
