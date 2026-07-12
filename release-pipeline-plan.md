@@ -10,7 +10,10 @@ so a fix lands once here and every consumer picks it up by bumping a pin.
 After every green push to the default branch, a per-repo GitHub App bot opens (or
 refreshes) exactly **one** standing release PR. That PR contains only the
 synchronized version files and generated release notes; it is skipped when no
-conventional commits since the last tag warrant a release. The maintainer merges
+conventional commits since the last tag warrant a release. When the planned
+version changes while a release PR stands (a feat lands during a fix series),
+the bot opens the new release/<version> PR and closes the old-version PR as
+superseded - the old PR's recorded base can never again be the branch head. The maintainer merges
 that PR - and **merging it is the sole release act**. The merge fires a forensic
 validator that binds the merged commit to the exact planned diff, then hands a
 fully re-verified, attested build to a publisher that creates the GitHub release.
@@ -30,7 +33,8 @@ There is no auto-release and no manual dispatch on the happy path.
     -> uses reusable release-prepare.yml
        job plan    : plan version + notes from conventional commits
        job open-pr : mint APP token, build version-file-only commit,
-                     open/refresh ONE draft release PR authored by the app bot
+                     open/refresh ONE draft release PR authored by the app bot,
+                     close any old-version release PR the new plan supersedes
         |
         | maintainer reviews green checks, marks ready, merges (squash)
         v
