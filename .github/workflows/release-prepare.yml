@@ -400,10 +400,12 @@ jobs:
                       if (crypto.createHash('sha256').update(notesRaw).digest('hex') !== process.env.NOTES_SHA256) {
                         throw new Error('Release artifact digest mismatch: release-notes.md');
                       }
-                      // The notes derive from commit messages, so neutralize HTML comment
-                      // openers: the provenance marker must stay the body's only
-                      // marker-shaped comment, and no note may hide rendered body text.
-                      const notes = notesRaw.toString('utf8').replaceAll('<!--', '&lt;!--').trim();
+                      // The notes derive from commit messages, so escape raw HTML: no
+                      // commit text may open a tag (e.g. <details>) or comment that hides
+                      // or restyles the rendered body, and the provenance marker must stay
+                      // the body's only marker-shaped comment. The generator emits pure
+                      // markdown, so escaping every '<' only affects commit-derived text.
+                      const notes = notesRaw.toString('utf8').replaceAll('<', '&lt;').trim();
                       if (!notes) throw new Error('Release notes are empty.');
 
                       const branchHead = await github.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });

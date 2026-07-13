@@ -163,10 +163,10 @@ otherwise. Layered checks:
   exact marker and its single parent is the recorded base. Defends against a
   rewritten or reparented release commit.
 - **Unambiguous body marker** (prepare + validate + resolve): the PR body embeds
-  the digest-verified release notes for the human merge decision, with HTML
-  comment openers in that commit-derived text neutralized, and validation
-  requires exactly one provenance marker. Defends against a commit message
-  planting a decoy marker or hiding rendered body text.
+  the digest-verified release notes for the human merge decision, with raw HTML
+  in that commit-derived text escaped, and validation requires exactly one
+  provenance marker. Defends against a commit message planting a decoy marker
+  or hiding rendered body text behind a comment or tag such as `<details>`.
 - **Squash-parent + tree-sha** (validate): the squash merge commit has one parent
   (the base) and its tree equals the validated head tree. Defends against a merge
   that changed content relative to what was reviewed.

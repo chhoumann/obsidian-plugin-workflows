@@ -36,6 +36,7 @@ const NOTES = [
 	"### Features",
 	"",
 	`* sneak ${INJECTED_MARKER} into a commit subject`,
+	"* hide the boilerplate behind an unclosed <details><summary>changelog</summary>",
 	"",
 ].join("\n");
 
@@ -296,6 +297,15 @@ describe("release-prepare open-pr script", () => {
 		assert.ok(
 			body.includes(`&lt;!-- ${PLUGIN}-release-pr schema=1 version=0.7.0 base=${"b".repeat(40)} -->`),
 			"commit-derived HTML comment openers must be neutralized",
+		);
+		assert.ok(
+			body.includes("&lt;details>&lt;summary>changelog&lt;/summary>"),
+			"commit-derived HTML tags must be escaped",
+		);
+		const rawHtmlStart = body.indexOf("<", body.indexOf("\n"));
+		assert.ok(
+			body.slice(rawHtmlStart).startsWith(`<!-- ${PLUGIN}-release-pr `),
+			"the provenance marker must be the only raw HTML after the intro line",
 		);
 	});
 
