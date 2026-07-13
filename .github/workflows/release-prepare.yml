@@ -86,6 +86,7 @@ jobs:
         outputs:
             artifact-name: ${{ steps.plan.outputs.artifact-name }}
             base-sha: ${{ steps.plan.outputs.base-sha }}
+            notes-sha256: ${{ steps.plan.outputs.notes-sha256 }}
             release: ${{ steps.plan.outputs.release || 'false' }}
             release-files: ${{ steps.files.outputs.list }}
             version: ${{ steps.plan.outputs.version }}
@@ -273,6 +274,7 @@ jobs:
                     --base-sha "$TARGET_SHA" \
                     --package-manager "$PACKAGE_MANAGER"
                   cp "$NOTES" "$OUTPUT/release-notes.md"
+                  echo "notes-sha256=$(sha256sum "$NOTES" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
                   ARTIFACT_NAME="release-version-files-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
                   echo "artifact-name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
                   echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -324,6 +326,7 @@ jobs:
               env:
                   BASE_SHA: ${{ needs.plan.outputs.base-sha }}
                   VERSION: ${{ needs.plan.outputs.version }}
+                  NOTES_SHA256: ${{ needs.plan.outputs.notes-sha256 }}
                   RELEASE_FILES: ${{ needs.plan.outputs.release-files }}
                   PLUGIN_NAME: ${{ inputs.plugin-name }}
                   DEFAULT_BRANCH: ${{ inputs.default-branch }}
@@ -387,6 +390,23 @@ jobs:
                       if (JSON.stringify(metadataNames) !== JSON.stringify(expectedFiles)) {
                         throw new Error('Release artifact metadata contains unexpected paths.');
                       }
+
+                      const notesPath = path.join(root, 'release-notes.md');
+                      const notesStat = fs.lstatSync(notesPath);
+                      if (!notesStat.isFile() || notesStat.isSymbolicLink()) {
+                        throw new Error('Invalid release artifact: release-notes.md');
+                      }
+                      const notesRaw = fs.readFileSync(notesPath);
+                      if (crypto.createHash('sha256').update(notesRaw).digest('hex') !== process.env.NOTES_SHA256) {
+                        throw new Error('Release artifact digest mismatch: release-notes.md');
+                      }
+                      // The notes derive from commit messages, so escape raw HTML: no
+                      // commit text may open a tag (e.g. <details>) or comment that hides
+                      // or restyles the rendered body, and the provenance marker must stay
+                      // the body's only marker-shaped comment. The generator emits pure
+                      // markdown, so escaping every '<' only affects commit-derived text.
+                      const notes = notesRaw.toString('utf8').replaceAll('<', '&lt;').trim();
+                      if (!notes) throw new Error('Release notes are empty.');
 
                       const branchHead = await github.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
                       if (branchHead.data.object.sha !== baseSha) {
@@ -523,8 +543,19 @@ jobs:
                         await github.rest.git.createRef({ owner, repo, ref: `refs/${ref}`, sha: commit.data.sha });
                       }
 
+                      // GitHub caps PR bodies at 65536 characters; leave headroom for the
+                      // fixed lines around the notes.
+                      const maxNotesLength = 60000;
+                      let bodyNotes = notes;
+                      if (bodyNotes.length > maxNotesLength) {
+                        const cut = bodyNotes.lastIndexOf('\n', maxNotesLength);
+                        bodyNotes = `${bodyNotes.slice(0, cut > 0 ? cut : maxNotesLength)}\n\n` +
+                          '_Notes truncated; the published GitHub release carries the full notes._';
+                      }
                       const body = [
                         `Prepare ${plugin} ${version} from tested ${defaultBranch} commit \`${baseSha}\`.`,
+                        '',
+                        bodyNotes,
                         '',
                         'This machine-generated PR changes only the synchronized version files.',
                         'Merge it manually after the required checks pass.',

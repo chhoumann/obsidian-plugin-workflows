@@ -196,13 +196,18 @@ jobs:
                       const title = `release(version): Release ${version}`;
                       if (pull.title !== title) throw new Error(`PR #${pullNumber} title does not match ${version}.`);
 
+                      // The body also carries commit-derived release notes, so provenance
+                      // binds to exactly one marker: ambiguity fails loudly.
                       const markerPattern = new RegExp(
                         `<!-- ${plugin}-release-pr schema=1 version=${version.replaceAll('.', '\\.')}` +
                         ' base=([0-9a-f]{40}) -->',
+                        'g',
                       );
-                      const marker = markerPattern.exec(pull.body || '');
-                      if (!marker) throw new Error(`PR #${pullNumber} is missing valid release provenance.`);
-                      const baseSha = marker[1];
+                      const markers = [...(pull.body || '').matchAll(markerPattern)];
+                      if (markers.length !== 1) {
+                        throw new Error(`PR #${pullNumber} must carry exactly one valid release provenance marker.`);
+                      }
+                      const baseSha = markers[0][1];
 
                       const files = await retryRead(() => github.paginate(github.rest.pulls.listFiles, {
                         owner,

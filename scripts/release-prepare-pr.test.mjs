@@ -29,6 +29,16 @@ const RELEASE_FILES = ["package.json", "package-lock.json", "manifest.json", "ve
 const MASTER_SHA = "a".repeat(40);
 const STALE_BASE_SHA = "d".repeat(40);
 const STALE_HEAD_SHA = "c".repeat(40);
+const INJECTED_MARKER = `<!-- ${PLUGIN}-release-pr schema=1 version=0.7.0 base=${"b".repeat(40)} -->`;
+const NOTES = [
+	"## [0.7.0](https://example.test/compare/0.6.7...0.7.0) (2026-07-13)",
+	"",
+	"### Features",
+	"",
+	`* sneak ${INJECTED_MARKER} into a commit subject`,
+	"* hide the boilerplate behind an unclosed <details><summary>changelog</summary>",
+	"",
+].join("\n");
 
 const originalCwd = process.cwd();
 const tempRoots = [];
@@ -62,7 +72,7 @@ async function loadOpenPrScript() {
 	return body.join("\n");
 }
 
-async function writeArtifact(version, baseSha) {
+async function writeArtifact(version, baseSha, notes) {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "opw-open-pr-"));
 	tempRoots.push(root);
 	const dir = path.join(root, "release-version-files");
@@ -81,6 +91,7 @@ async function writeArtifact(version, baseSha) {
 		path.join(dir, "release-version-files.json"),
 		JSON.stringify({ schemaVersion: 1, version, baseSha, files: entries }),
 	);
+	await fs.writeFile(path.join(dir, "release-notes.md"), notes);
 	return root;
 }
 
@@ -227,9 +238,9 @@ function createGithub(state) {
 	};
 }
 
-async function runOpenPrScript(state, { version, baseSha = MASTER_SHA } = {}) {
+async function runOpenPrScript(state, { version, baseSha = MASTER_SHA, notes = NOTES, notesSha256 } = {}) {
 	const script = await loadOpenPrScript();
-	const root = await writeArtifact(version, baseSha);
+	const root = await writeArtifact(version, baseSha, notes);
 	process.chdir(root);
 	const run = new AsyncFunction("github", "context", "core", "require", "process", script);
 	await run(
@@ -245,6 +256,7 @@ async function runOpenPrScript(state, { version, baseSha = MASTER_SHA } = {}) {
 			env: {
 				BASE_SHA: baseSha,
 				VERSION: version,
+				NOTES_SHA256: notesSha256 ?? crypto.createHash("sha256").update(notes).digest("hex"),
 				RELEASE_FILES: JSON.stringify(RELEASE_FILES),
 				PLUGIN_NAME: PLUGIN,
 				DEFAULT_BRANCH,
@@ -266,6 +278,62 @@ describe("release-prepare open-pr script", () => {
 		assert.equal(state.pulls[0].state, "open");
 		assert.ok(state.branches.has("release/0.7.0"));
 		assert.deepEqual(state.comments, []);
+	});
+
+	it("embeds the sanitized release notes above a single provenance marker", async () => {
+		const state = createState({ branches: { [DEFAULT_BRANCH]: MASTER_SHA } });
+
+		await runOpenPrScript(state, { version: "0.7.0" });
+
+		const body = state.pulls[0].body;
+		assert.match(body, /^Prepare notetweet 0\.7\.0 from tested master commit `a{40}`\./);
+		assert.ok(body.includes("### Features"), "release notes are missing from the body");
+		const markers = body.match(new RegExp(`<!-- ${PLUGIN}-release-pr `, "g"));
+		assert.equal(markers?.length, 1, "the body must contain exactly one marker-shaped comment");
+		assert.ok(
+			body.endsWith(`<!-- ${PLUGIN}-release-pr schema=1 version=0.7.0 base=${MASTER_SHA} -->`),
+			"the provenance marker must close the body",
+		);
+		assert.ok(
+			body.includes(`&lt;!-- ${PLUGIN}-release-pr schema=1 version=0.7.0 base=${"b".repeat(40)} -->`),
+			"commit-derived HTML comment openers must be neutralized",
+		);
+		assert.ok(
+			body.includes("&lt;details>&lt;summary>changelog&lt;/summary>"),
+			"commit-derived HTML tags must be escaped",
+		);
+		const rawHtmlStart = body.indexOf("<", body.indexOf("\n"));
+		assert.ok(
+			body.slice(rawHtmlStart).startsWith(`<!-- ${PLUGIN}-release-pr `),
+			"the provenance marker must be the only raw HTML after the intro line",
+		);
+	});
+
+	it("truncates oversized notes below the GitHub body limit, keeping the marker", async () => {
+		const state = createState({ branches: { [DEFAULT_BRANCH]: MASTER_SHA } });
+		const longNotes = `## 0.7.0\n\n${"* a fix line padded out to keep each entry realistic\n".repeat(1500)}`;
+
+		await runOpenPrScript(state, { version: "0.7.0", notes: longNotes });
+
+		const body = state.pulls[0].body;
+		assert.ok(body.length <= 65536, `body length ${body.length} exceeds the GitHub limit`);
+		assert.ok(body.includes("_Notes truncated;"), "truncated bodies must say so");
+		assert.ok(
+			body.endsWith(`<!-- ${PLUGIN}-release-pr schema=1 version=0.7.0 base=${MASTER_SHA} -->`),
+			"the provenance marker must survive truncation",
+		);
+	});
+
+	it("rejects release notes whose digest does not match the plan output", async () => {
+		const state = createState({ branches: { [DEFAULT_BRANCH]: MASTER_SHA } });
+
+		await assert.rejects(
+			runOpenPrScript(state, { version: "0.7.0", notesSha256: "0".repeat(64) }),
+			/digest mismatch: release-notes\.md/,
+		);
+
+		assert.equal(state.pulls.length, 0);
+		assert.ok(!state.branches.has("release/0.7.0"), "no branch may be created from tampered notes");
 	});
 
 	it("refreshes the standing PR in place when the version is unchanged", async () => {
