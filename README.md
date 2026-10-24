@@ -385,7 +385,8 @@ per-file guide in [`templates/README.md`](./templates/README.md):
 Consumers pin a commit SHA with a version comment, so every release needs an
 immutable semver tag for that comment and for Dependabot to compare against.
 
-- Tag each release `v4.1.0`, `v4.2.0`, ... and never move or delete those tags.
+- Tag each release `v4.1.0`, `v4.2.0`, ... The "Immutable release tags" ruleset
+  blocks moving or deleting any `v*.*.*` tag.
 - Keep the major tag (`v4`) pointed at the latest compatible release for anyone
   still on tag pins: `git tag -f v4 v4.2.0 && git push -f origin v4`.
 - Cut `v5` only for a breaking change to a workflow's input surface or behavior.
