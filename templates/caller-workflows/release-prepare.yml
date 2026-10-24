@@ -7,7 +7,8 @@
 # default-branch head and opens/refreshes the standing release PR.
 #
 # Escape hatch: workflow_dispatch lets you plan manually without waiting for a
-# CI completion. Set dryRun to plan without opening or refreshing the release PR.
+# CI completion. Set dryRun to plan and check the App credentials without opening
+# or refreshing the release PR.
 
 name: Prepare release
 
@@ -57,7 +58,7 @@ jobs:
             node-version: "22"
             target-sha: ${{ github.event.workflow_run.head_sha || inputs.targetSha }}
             release-bot-app-slug: podnotes-release-bot
-            app-id: ${{ vars.RELEASE_APP_ID }}
+            client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
             dry-run: ${{ inputs.dryRun == true }}
         secrets:
             release-app-private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}

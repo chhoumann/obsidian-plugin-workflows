@@ -32,7 +32,7 @@ A consumer references a workflow by path and pins a ref:
 ```yaml
 jobs:
   ci:
-    uses: chhoumann/obsidian-plugin-workflows/.github/workflows/ci.yml@<full-commit-sha> # v4.1.0
+    uses: chhoumann/obsidian-plugin-workflows/.github/workflows/ci.yml@<full-commit-sha> # v5.0.0
     with:
       package-manager: pnpm
 ```
@@ -182,7 +182,7 @@ Shared across all three reusables:
 | `release-bot-app-slug` | (required) | App slug; the expected bot login is `<slug>[bot]`. |
 
 `release-prepare.yml` adds: `target-sha` (empty = default-branch head),
-`node-version`, `release-policy` (below), `app-id` (a repo **variable** value),
+`node-version`, `release-policy` (below), `client-id` (a repo **variable** value),
 the `release-app-private-key` **secret**, and `dry-run`. `release-validate.yml`
 adds: `pr-number`, `release-merger-login` (empty = repo owner), and
 `release-workflow` (the consumer workflow to dispatch). `release.yml` adds:
@@ -262,9 +262,10 @@ control and can be made a branch-protection bypass actor. Per repo:
    and write**. No account permissions, no webhook.
 3. Generate a private key (downloads a `.pem`).
 4. Install the App on the plugin repo only (Install App -> select the repo).
-5. In the repo: add a variable `RELEASE_APP_ID` (Settings -> Secrets and variables
-   -> Actions -> Variables) with the App's numeric id, and a secret
-   `RELEASE_APP_PRIVATE_KEY` with the full `.pem` contents.
+5. In the repo: add a variable `RELEASE_APP_CLIENT_ID` (Settings -> Secrets and
+   variables -> Actions -> Variables) with the App's **Client ID** (shown on the
+   App's General page, e.g. `Iv23li...`), and a secret `RELEASE_APP_PRIVATE_KEY`
+   with the full `.pem` contents.
 6. If the default branch is protected, add the App as an allowed bypass/merge actor
    as your ruleset requires (the maintainer still merges the PR; the App only
    authors it).
@@ -274,10 +275,10 @@ control and can be made a branch-protection bypass actor. Per repo:
 Before a repo's first real release, dispatch the **Prepare release** workflow
 manually (Actions -> Prepare release -> Run workflow) with **dryRun** checked. The
 stub forwards it as the reusable workflow's `dry-run` input. The plan job computes
-the version and notes and uploads them as an artifact; the open-PR job is skipped,
-so nothing is pushed and no App call is made (dummy `app-id` / slug are fine for a
-pure planning check). Confirm the planned version and notes look right. Dispatch
-with `dryRun` again any time to preview the next release.
+the version and notes and uploads them as an artifact, and a check job mints a
+read-only App token and confirms its slug matches `release-bot-app-slug`. The
+open-PR job is skipped, so nothing is pushed. Confirm the planned version and notes
+look right. Dispatch with `dryRun` again any time to preview the next release.
 
 ### Recovery
 
@@ -317,7 +318,7 @@ workflow state.
 
 1. Ensure the current released version is tagged and has a published GitHub release
    (the planner requires a tagged baseline).
-2. Create and install the release-bot App; set `RELEASE_APP_ID` +
+2. Create and install the release-bot App; set `RELEASE_APP_CLIENT_ID` +
    `RELEASE_APP_PRIVATE_KEY` (above).
 3. Copy the three caller stubs from
    [`templates/caller-workflows/`](./templates/caller-workflows)
@@ -385,12 +386,12 @@ per-file guide in [`templates/README.md`](./templates/README.md):
 Consumers pin a commit SHA with a version comment, so every release needs an
 immutable semver tag for that comment and for Dependabot to compare against.
 
-- Tag each release `v4.1.0`, `v4.2.0`, ... The "Immutable release tags" ruleset
+- Tag each release `v5.0.0`, `v5.1.0`, ... The "Immutable release tags" ruleset
   blocks moving or deleting any `v*.*.*` tag.
-- Keep the major tag (`v4`) pointed at the latest compatible release for anyone
-  still on tag pins: `git tag -f v4 v4.2.0 && git push -f origin v4`.
-- Cut `v5` only for a breaking change to a workflow's input surface or behavior.
-  Leave `v4` in place so unmigrated consumers keep working, then migrate them.
+- Keep the major tag (`v5`) pointed at the latest compatible release for anyone
+  still on tag pins: `git tag -f v5 v5.1.0 && git push -f origin v5`.
+- Cut `v6` only for a breaking change to a workflow's input surface or behavior.
+  Leave `v5` in place so unmigrated consumers keep working, then migrate them.
 
 ## Migration checklist (CI and quality workflows)
 
