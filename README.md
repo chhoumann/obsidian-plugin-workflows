@@ -344,19 +344,19 @@ kept fresh by Dependabot in the source repos and reused here verbatim:
 
 | Action | Version | SHA |
 | --- | --- | --- |
-| `step-security/harden-runner` | v2.19.4 | `9af89fc71515a100421586dfdb3dc9c984fbf411` |
-| `actions/checkout` | v7.0.0 | `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` |
-| `pnpm/action-setup` | v6.0.9 | `0ebf47130e4866e96fce0953f49152a61190b271` |
-| `actions/setup-node` | v6.4.0 | `48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e` |
-| `github/codeql-action/*` | v4 | `54f647b7e1bb85c95cddabcd46b0c578ec92bc1a` |
+| `step-security/harden-runner` | v2.22.1 | `ccd8616d44fd3846e67624a50d5aad6d37bf2d25` |
+| `actions/checkout` | v7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
+| `pnpm/action-setup` | v6.1.0 | `ea17c68df8912ef543352723c149a84f56e3d413` |
+| `actions/setup-node` | v7.1.0 | `949feb2413d6458794dcd2491c4babbbce0c15c1` |
+| `github/codeql-action/*` | v4.39.0 | `6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee` |
 | `actions/dependency-review-action` | v5.0.0 | `a1d282b36b6f3519aa1f3fc636f609c47dddb294` |
 | `amannn/action-semantic-pull-request` | v6.1.1 | `48f256284bd46cdaab1048c3721360e808335d50` |
-| `actions/github-script` | v8.0.0 | `ed597411d8f924073f98dfc5c65a23a2325f34cd` |
-| `actions/create-github-app-token` | v3.2.0 | `bcd2ba49218906704ab6c1aa796996da409d3eb1` |
-| `actions/upload-artifact` | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` |
-| `actions/download-artifact` | v8.0.1 | `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` |
+| `actions/github-script` | v9.0.0 | `3a2844b7e9c422d3c10d287c895573f7108da1b3` |
+| `actions/create-github-app-token` | v3.3.0 | `64ab729a6294000f5aa4a4bc0b73d1f32bc45510` |
+| `actions/upload-artifact` | v7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
+| `actions/download-artifact` | v8.0.2 | `9000827ccba6bdab643e8b6fd33ac0654aef8333` |
 | `actions/attest-build-provenance` | v4.1.1 | `0f67c3f4856b2e3261c31976d6725780e5e4c373` |
-| `actions/setup-python` | v6.3.0 | `ece7cb06caefa5fff74198d8649806c4678c61a1` |
+| `actions/setup-python` | v7.0.0 | `5fda3b95a4ea91299a34e894583c3862153e4b97` |
 | `rtCamp/action-slack-notify` | v2.4.0 | `33ca3be66c6f378fe1610fd1d5258632dbed5e58` |
 
 Add this repo's `github-actions` ecosystem to each consumer's Dependabot so the
