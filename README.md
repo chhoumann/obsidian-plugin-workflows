@@ -223,7 +223,7 @@ otherwise. The layered checks:
 - **Durable recovery branch** `release-run/<version>` - pins the exact release SHA
   so a failed or re-run release recovers to the same commit; deleted only after a
   verified publish.
-- **Attestation + post-publish verification** - `attest-build-provenance` signs the
+- **Attestation + post-publish verification** - `actions/attest` signs the
   assets; publish runs `gh attestation verify` against the exact source digest, then
   downloads every remote asset and re-hashes it. Blocks tampered or swapped assets.
 
@@ -355,7 +355,7 @@ kept fresh by Dependabot in the source repos and reused here verbatim:
 | `actions/create-github-app-token` | v3.3.0 | `64ab729a6294000f5aa4a4bc0b73d1f32bc45510` |
 | `actions/upload-artifact` | v7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
 | `actions/download-artifact` | v8.0.2 | `9000827ccba6bdab643e8b6fd33ac0654aef8333` |
-| `actions/attest-build-provenance` | v4.1.1 | `0f67c3f4856b2e3261c31976d6725780e5e4c373` |
+| `actions/attest` | v4.2.2 | `1e69f48acb82d1966a394da916b4c1698aa569d6` |
 | `actions/setup-python` | v7.0.0 | `5fda3b95a4ea91299a34e894583c3862153e4b97` |
 | `rtCamp/action-slack-notify` | v2.4.0 | `33ca3be66c6f378fe1610fd1d5258632dbed5e58` |
 
