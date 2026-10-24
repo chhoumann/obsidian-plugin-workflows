@@ -107,19 +107,20 @@ Example caller: [`templates/caller-workflows/dependency-review.yml`](./templates
 
 ### `pr-title.yml`
 
-Validates the PR title as a Conventional Commit via
-`amannn/action-semantic-pull-request`. The title becomes the squash-merge commit,
+Validates the PR title as a Conventional Commit header
+(`<type>[(scope)][!]: <subject>`) in a few lines of shell, reading the live
+title with a read-only token. The title becomes the squash-merge commit,
 which drives the semantic-release version - so a bad title can't produce a wrong
 or missing release.
 
 | Input | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `types` | string | standard set (`feat`, `fix`, `perf`, `docs`, `style`, `refactor`, `test`, `build`, `ci`, `chore`, `revert`) | Newline-separated allowed commit types. |
+| `types` | string | standard set (`feat`, `fix`, `perf`, `docs`, `style`, `refactor`, `test`, `build`, `ci`, `chore`, `revert`, `release`) | Newline- or comma-separated allowed commit types. |
 
-**The caller must trigger on `pull_request_target`,** not `pull_request`: a fork
-PR's title is only reliably readable, and `GITHUB_TOKEN` only carries the right
-context, under `pull_request_target`. This is safe here because the workflow
-never checks out or runs PR head code.
+**The caller must trigger on `pull_request_target`,** not `pull_request`: it runs
+the base branch's workflow definition, so a PR cannot edit away its own title
+check. This is safe here because the workflow never checks out or runs PR head code and only
+reads the PR.
 
 Example caller: [`templates/caller-workflows/pr-title.yml`](./templates/caller-workflows/pr-title.yml).
 
@@ -350,7 +351,6 @@ kept fresh by Dependabot in the source repos and reused here verbatim:
 | `actions/setup-node` | v7.1.0 | `949feb2413d6458794dcd2491c4babbbce0c15c1` |
 | `github/codeql-action/*` | v4.39.0 | `6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee` |
 | `actions/dependency-review-action` | v5.0.0 | `a1d282b36b6f3519aa1f3fc636f609c47dddb294` |
-| `amannn/action-semantic-pull-request` | v6.1.1 | `48f256284bd46cdaab1048c3721360e808335d50` |
 | `actions/github-script` | v9.0.0 | `3a2844b7e9c422d3c10d287c895573f7108da1b3` |
 | `actions/create-github-app-token` | v3.3.0 | `64ab729a6294000f5aa4a4bc0b73d1f32bc45510` |
 | `actions/upload-artifact` | v7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
