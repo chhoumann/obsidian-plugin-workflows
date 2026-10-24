@@ -1086,8 +1086,7 @@ jobs:
         name: Send notifications
         needs: [resolve, publish]
         runs-on: ubuntu-latest
-        permissions:
-            contents: read
+        permissions: {}
         env:
             SLACK_WEBHOOK: ${{ secrets.slack-webhook }}
             DISCORD_WEBHOOK: ${{ secrets.discord-webhook }}
@@ -1101,12 +1100,9 @@ jobs:
 
             - name: Notify Slack
               if: env.SLACK_WEBHOOK != ''
-              uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
-              env:
-                  SLACK_TITLE: "New Release"
-                  SLACK_MESSAGE: "Version ${{ env.VERSION }} of ${{ env.DISPLAY_NAME }} has been released."
-                  SLACK_COLOR: good
-                  MSG_MINIMAL: true
+              run: |
+                  payload="$(jq -n --arg text "Version ${VERSION} of ${DISPLAY_NAME} has been released." '{attachments: [{color: "good", fallback: $text, title: "New Release", text: $text}]}')"
+                  curl -fsSL -X POST -H "Content-Type: application/json" -d "$payload" "$SLACK_WEBHOOK"
 
             - name: Notify Discord
               if: env.DISCORD_WEBHOOK != ''

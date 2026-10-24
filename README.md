@@ -357,7 +357,6 @@ kept fresh by Dependabot in the source repos and reused here verbatim:
 | `actions/download-artifact` | v8.0.2 | `9000827ccba6bdab643e8b6fd33ac0654aef8333` |
 | `actions/attest` | v4.2.2 | `1e69f48acb82d1966a394da916b4c1698aa569d6` |
 | `actions/setup-python` | v7.0.0 | `5fda3b95a4ea91299a34e894583c3862153e4b97` |
-| `rtCamp/action-slack-notify` | v2.4.0 | `33ca3be66c6f378fe1610fd1d5258632dbed5e58` |
 
 Add this repo's `github-actions` ecosystem to each consumer's Dependabot so the
 `@v1`/`@v4`/SHA pins here get bumped like any other action.
