@@ -47,6 +47,28 @@ jobs:
             - name: Test
               run: npm test
 
+            # The release workflows install the toolkit from inside the caller's
+            # checkout. A caller's pnpm pin, pnpm-workspace.yaml or .npmrc must not
+            # change that install, or it can silently install the caller's
+            # packages instead.
+            - name: Toolkit install ignores the caller's pnpm config
+              shell: bash
+              run: |
+                  CALLER="$RUNNER_TEMP/caller"
+                  mkdir -p "$CALLER"
+                  git archive --prefix=.release-toolkit/ HEAD | tar -x -C "$CALLER"
+                  cd "$CALLER"
+                  echo '{"name":"caller","private":true,"packageManager":"pnpm@12.14.0"}' > package.json
+                  printf 'nodeLinker: hoisted\nminimumReleaseAge: 999999999\n' > pnpm-workspace.yaml
+                  echo 'node-linker=hoisted' > .npmrc
+
+                  pnpm --dir .release-toolkit install --frozen-lockfile --ignore-scripts | tee "$RUNNER_TEMP/toolkit-install.log"
+
+                  TOOLKIT_PNPM="$(node -p "require('./.release-toolkit/package.json').packageManager.split('@')[1]")"
+                  grep -q "using pnpm v$TOOLKIT_PNPM" "$RUNNER_TEMP/toolkit-install.log"
+                  test -f .release-toolkit/node_modules/@semantic-release/commit-analyzer/package.json
+                  test ! -e .release-toolkit/node_modules/handlebars
+
     lint-workflows:
         name: Lint workflows
         runs-on: ubuntu-latest
