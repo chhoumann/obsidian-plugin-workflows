@@ -272,12 +272,12 @@ control and can be made a branch-protection bypass actor. Per repo:
 ### Dry-run smoke test
 
 Before a repo's first real release, dispatch the **Prepare release** workflow
-manually (Actions -> Prepare release -> Run workflow) with `dry-run: true` wired in
-the stub, or temporarily uncomment `# dry-run: true`. The plan job computes the
-version and notes and uploads them as an artifact; the open-PR job is skipped, so
-nothing is pushed and no App call is made (dummy `app-id` / slug are fine for a
-pure planning check). Confirm the planned version and notes look right, then remove
-the dry-run.
+manually (Actions -> Prepare release -> Run workflow) with **dryRun** checked. The
+stub forwards it as the reusable workflow's `dry-run` input. The plan job computes
+the version and notes and uploads them as an artifact; the open-PR job is skipped,
+so nothing is pushed and no App call is made (dummy `app-id` / slug are fine for a
+pure planning check). Confirm the planned version and notes look right. Dispatch
+with `dryRun` again any time to preview the next release.
 
 ### Recovery
 
@@ -339,7 +339,7 @@ workflow state.
    `refs/heads/release/<version>`, so a stray branch blocks the pipeline's
    branch creation. Prepare and validate preflight this and fail with an
    actionable message, but deleting the stray up front saves a failed run.
-5. Smoke-test with `dry-run: true`, then push a conventional commit to the default
+5. Smoke-test by dispatching **Prepare release** with `dryRun` checked, then push a conventional commit to the default
    branch and merge the release PR the bot opens.
 
 ## Pinned action versions
