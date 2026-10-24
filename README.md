@@ -32,16 +32,20 @@ A consumer references a workflow by path and pins a ref:
 ```yaml
 jobs:
   ci:
-    uses: chhoumann/obsidian-plugin-workflows/.github/workflows/ci.yml@v1
+    uses: chhoumann/obsidian-plugin-workflows/.github/workflows/ci.yml@<full-commit-sha> # v4.1.0
     with:
       package-manager: pnpm
 ```
 
-Pin `@v1` (the moving major tag, see [Versioning](#versioning-of-this-repo)) for
-automatic non-breaking updates, or a full commit SHA if you want to pin exactly
-and let Dependabot bump it. The consumer supplies the **triggers**
-(`on:` block); the reusable workflow supplies the jobs. Some triggers *must* live
-in the caller - see each workflow's notes below.
+Pin a full commit SHA with the release tag as a comment, never a bare tag. A tag
+can be moved by anyone who can push here, and every consumer would run the new
+code on its next run; a SHA changes only when the consumer merges a bump.
+Dependabot's `github-actions` ecosystem proposes those bumps from the version
+comment (see [Versioning](#versioning-of-this-repo)).
+
+The consumer supplies the **triggers** (`on:` block); the reusable workflow
+supplies the jobs. Some triggers *must* live in the caller - see each workflow's
+notes below.
 
 Ready-to-copy caller stubs are in
 [`templates/caller-workflows/`](./templates/caller-workflows).
@@ -160,7 +164,7 @@ trigger + `uses:`; all logic lives in the reusables here.
 
 A caller stub sets the token ceiling with a top-level or per-job `permissions:`
 that grants the union its reusable needs; the reusable scopes each job down from
-there. Copy the stubs and pin `@v4`; the toolkit scripts are checked out from
+there. Copy the stubs and keep the commit SHA pin; the toolkit scripts are checked out from
 the reusable workflow's own commit (`job.workflow_repository` /
 `job.workflow_sha`), so the `uses:` ref is the single version pin.
 
@@ -322,7 +326,7 @@ workflow state.
    `package-manager`, `release-policy`, `default-branch`, `node-version`,
    `release-bot-app-slug`, `release-assets` (add `styles.css` if the plugin
    ships one), and `verify-commands` to match the repo's scripts.
-   - **One pin:** the `uses: ...@v4` ref selects this repo's version for the
+   - **One pin:** the `uses: ...@<sha>` ref selects this repo's version for the
      workflow AND its toolkit scripts (checked out from the reusable workflow's
      own commit), so Dependabot SHA bumps are always self-consistent.
    - **If the default branch is not `master`,** the literal appears in **five
@@ -359,7 +363,7 @@ kept fresh by Dependabot in the source repos and reused here verbatim:
 | `actions/setup-python` | v7.0.0 | `5fda3b95a4ea91299a34e894583c3862153e4b97` |
 
 Add this repo's `github-actions` ecosystem to each consumer's Dependabot so the
-`@v1`/`@v4`/SHA pins here get bumped like any other action.
+SHA pins on this repo's workflows get bumped like any other action.
 
 ## Templates
 
@@ -377,14 +381,14 @@ per-file guide in [`templates/README.md`](./templates/README.md):
 
 ## Versioning of this repo
 
-Consumers pin a ref, so this repo carries a moving major tag.
+Consumers pin a commit SHA with a version comment, so every release needs an
+immutable semver tag for that comment and for Dependabot to compare against.
 
-- Tag releases `v1.0.0`, `v1.1.0`, ... and keep a `v1` tag pointed at the latest
-  compatible release. Consumers pin `@v1`.
-- Move `v1` forward on any backwards-compatible change:
-  `git tag -f v1 v1.2.0 && git push -f origin v1`.
-- Cut `v2` only for a breaking change to a workflow's input surface or behavior.
-  Leave `v1` in place so unmigrated consumers keep working, then migrate them.
+- Tag each release `v4.1.0`, `v4.2.0`, ... and never move or delete those tags.
+- Keep the major tag (`v4`) pointed at the latest compatible release for anyone
+  still on tag pins: `git tag -f v4 v4.2.0 && git push -f origin v4`.
+- Cut `v5` only for a breaking change to a workflow's input surface or behavior.
+  Leave `v4` in place so unmigrated consumers keep working, then migrate them.
 
 ## Migration checklist (CI and quality workflows)
 
@@ -399,7 +403,7 @@ Consumers pin a ref, so this repo carries a moving major tag.
    `"release"` block matches `templates/semantic-release.jsonc` (adjust the
    lockfile asset and `styles.css` presence).
 4. Align `.github/dependabot.yml` with `templates/dependabot.yml`, and add a
-   `github-actions` entry so the new `@v1` pins get updated.
+   `github-actions` entry so the SHA pins get updated.
 5. Open a PR. Verify all four checks run and that required-check names still match
    your branch protection (the job names are `Test`, `Build + Lint`,
    `Analyze (...)`, `Dependency Review`, `Validate PR title`).
