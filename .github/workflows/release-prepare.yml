@@ -209,6 +209,8 @@ jobs:
               with:
                   node-version: ${{ inputs.node-version }}
                   check-latest: true
+                  # Release jobs never restore a dependency cache another run could have written.
+                  package-manager-cache: false
 
             - name: Install toolkit dependencies
               if: >-
