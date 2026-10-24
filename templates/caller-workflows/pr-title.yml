@@ -8,7 +8,7 @@ name: PR Title
 # out PR head code, so this is safe. The validated title becomes the
 # squash-merge commit, which drives the semantic-release version.
 on:
-    pull_request_target:
+    pull_request_target: # zizmor: ignore[dangerous-triggers] reads only the title; no checkout
         types: [opened, edited, synchronize, reopened]
 
 permissions:

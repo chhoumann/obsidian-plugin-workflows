@@ -10,7 +10,7 @@
 name: Trigger release
 
 on:
-    pull_request_target:
+    pull_request_target: # zizmor: ignore[dangerous-triggers] checks out only the pinned toolkit
         types: [closed]
     # Recovery path: re-validate an already-merged release PR (e.g. after a
     # toolkit pin bump fixes a validation bug). The reusable workflow re-derives

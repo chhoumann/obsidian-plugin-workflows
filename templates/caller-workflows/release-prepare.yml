@@ -12,7 +12,7 @@
 name: Prepare release
 
 on:
-    workflow_run:
+    workflow_run: # zizmor: ignore[dangerous-triggers] gated to push runs on the default branch head
         # Must match the name: of your CI workflow (the shared ci.yml is "CI").
         workflows: ["CI"]
         types: [completed]
