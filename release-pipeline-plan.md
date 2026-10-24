@@ -120,7 +120,7 @@ Genuinely per-repo values become `workflow_call` inputs. The load-bearing ones:
 - **release-bot-app-slug** - the per-repo App slug; the expected bot login is
   `<slug>[bot]`. prepare cross-checks the minted token's slug against it;
   validate and release check `pull.user.login` against it.
-- **app-id** (var) + **release-app-private-key** (secret) - mint the App token in
+- **client-id** (var) + **release-app-private-key** (secret) - mint the App token in
   prepare for PR/commit authorship.
 - **workflows-ref / workflows-repository** - the pin + repo for the scripts
   checkout; `workflows-ref` is kept in sync with the `uses: ...@<ref>` pin.
@@ -191,12 +191,12 @@ otherwise. Layered checks:
    `package-manager: pnpm`, `release-assets` including `styles.css`,
    `node-version: 24`.
 
-Each repo needs its App created and installed, and `RELEASE_APP_ID` (var) +
+Each repo needs its App created and installed, and `RELEASE_APP_CLIENT_ID` (var) +
 `RELEASE_APP_PRIVATE_KEY` (secret) set before its first release. See the README.
 
 ## Dry-run / smoke test before a first real release
 
 `release-prepare.yml` exposes a `dry-run` input: the plan job computes the version
-and notes and uploads them as an artifact, and the open-pr job is skipped, so a
-consumer can confirm planning works end to end without opening a PR or touching an
-App. The README documents driving it via the `workflow_dispatch` escape hatch.
+and notes and uploads them as an artifact, a check job mints a read-only App token
+and confirms its slug, and the open-pr job is skipped, so a consumer can confirm
+planning and the App credentials work end to end without opening a PR. The README documents driving it via the `workflow_dispatch` escape hatch.
