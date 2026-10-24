@@ -4,7 +4,9 @@ version: 2
 # COPY-IN TEMPLATE: place at .github/dependabot.yml. Grouping keeps the SHA pins
 # and dependency tree fresh in a small number of PRs rather than one-per-bump.
 # Commit prefixes align with the Conventional Commit types the release toolkit
-# expects: `ci` for Actions, `build` for package dependencies.
+# expects: `ci` for Actions, `build` for package dependencies. The cooldown
+# holds back releases younger than 7 days, the window in which compromised
+# publishes are usually caught and pulled.
 updates:
   # GitHub Actions across all workflows. Keeps SHA pins from rotting - a Node
   # runtime deprecation slips in precisely when nothing watches these.
@@ -13,6 +15,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -29,6 +33,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
     groups:
       dev-dependencies:
         dependency-type: development

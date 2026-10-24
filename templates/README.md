@@ -51,7 +51,9 @@ the load-bearing ones:
 
 Grouped weekly updates for GitHub Actions and npm dependencies. Place at
 `.github/dependabot.yml`. Commit prefixes (`ci` for Actions, `build` for package
-deps) match the Conventional Commit types the release toolkit expects. Add extra
+deps) match the Conventional Commit types the release toolkit expects. A 7-day
+`cooldown` keeps brand-new releases out of version-update PRs; security updates
+are not delayed. Add extra
 `package-ecosystem` entries (e.g. a `docs/` subproject) as your repo needs.
 
 ## `caller-workflows/`

@@ -344,8 +344,8 @@ workflow state.
 
 ## Pinned action versions
 
-Every third-party action is SHA-pinned with a version comment. These SHAs are
-kept fresh by Dependabot in the source repos and reused here verbatim:
+Every third-party action is SHA-pinned with a version comment. This repo's
+Dependabot config keeps them fresh and holds back releases younger than 7 days:
 
 | Action | Version | SHA |
 | --- | --- | --- |
@@ -374,7 +374,8 @@ per-file guide in [`templates/README.md`](./templates/README.md):
   `npm version` / `pnpm version` bump (the shared pipeline does this itself).
 - `semantic-release.jsonc` - legacy semantic-release plugin chain, kept for repos
   not yet on the shared release pipeline.
-- `dependabot.yml` - grouped weekly npm + github-actions updates.
+- `dependabot.yml` - grouped weekly npm + github-actions updates with a 7-day
+  cooldown.
 - `caller-workflows/` - minimal stubs consuming the reusable workflows, including
   the three release-pipeline stubs (`release-prepare.yml`, `release-trigger.yml`,
   `release.yml`).

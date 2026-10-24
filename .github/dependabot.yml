@@ -1,0 +1,31 @@
+version: 2
+# Keeps this repo's own action pins and toolkit lockfile fresh. The cooldown
+# matches minimumReleaseAge in pnpm-workspace.yaml: no release younger than 7
+# days is proposed.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      toolkit:
+        patterns: ["*"]
+    commit-message:
+      prefix: build
+      include: scope
