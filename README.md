@@ -32,16 +32,20 @@ A consumer references a workflow by path and pins a ref:
 ```yaml
 jobs:
   ci:
-    uses: chhoumann/obsidian-plugin-workflows/.github/workflows/ci.yml@v1
+    uses: chhoumann/obsidian-plugin-workflows/.github/workflows/ci.yml@<full-commit-sha> # v4.1.0
     with:
       package-manager: pnpm
 ```
 
-Pin `@v1` (the moving major tag, see [Versioning](#versioning-of-this-repo)) for
-automatic non-breaking updates, or a full commit SHA if you want to pin exactly
-and let Dependabot bump it. The consumer supplies the **triggers**
-(`on:` block); the reusable workflow supplies the jobs. Some triggers *must* live
-in the caller - see each workflow's notes below.
+Pin a full commit SHA with the release tag as a comment, never a bare tag. A tag
+can be moved by anyone who can push here, and every consumer would run the new
+code on its next run; a SHA changes only when the consumer merges a bump.
+Dependabot's `github-actions` ecosystem proposes those bumps from the version
+comment (see [Versioning](#versioning-of-this-repo)).
+
+The consumer supplies the **triggers** (`on:` block); the reusable workflow
+supplies the jobs. Some triggers *must* live in the caller - see each workflow's
+notes below.
 
 Ready-to-copy caller stubs are in
 [`templates/caller-workflows/`](./templates/caller-workflows).
@@ -107,19 +111,20 @@ Example caller: [`templates/caller-workflows/dependency-review.yml`](./templates
 
 ### `pr-title.yml`
 
-Validates the PR title as a Conventional Commit via
-`amannn/action-semantic-pull-request`. The title becomes the squash-merge commit,
+Validates the PR title as a Conventional Commit header
+(`<type>[(scope)][!]: <subject>`) in a few lines of shell, reading the live
+title with a read-only token. The title becomes the squash-merge commit,
 which drives the semantic-release version - so a bad title can't produce a wrong
 or missing release.
 
 | Input | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `types` | string | standard set (`feat`, `fix`, `perf`, `docs`, `style`, `refactor`, `test`, `build`, `ci`, `chore`, `revert`) | Newline-separated allowed commit types. |
+| `types` | string | standard set (`feat`, `fix`, `perf`, `docs`, `style`, `refactor`, `test`, `build`, `ci`, `chore`, `revert`, `release`) | Newline- or comma-separated allowed commit types. |
 
-**The caller must trigger on `pull_request_target`,** not `pull_request`: a fork
-PR's title is only reliably readable, and `GITHUB_TOKEN` only carries the right
-context, under `pull_request_target`. This is safe here because the workflow
-never checks out or runs PR head code.
+**The caller must trigger on `pull_request_target`,** not `pull_request`: it runs
+the base branch's workflow definition, so a PR cannot edit away its own title
+check. This is safe here because the workflow never checks out or runs PR head code and only
+reads the PR.
 
 Example caller: [`templates/caller-workflows/pr-title.yml`](./templates/caller-workflows/pr-title.yml).
 
@@ -159,7 +164,7 @@ trigger + `uses:`; all logic lives in the reusables here.
 
 A caller stub sets the token ceiling with a top-level or per-job `permissions:`
 that grants the union its reusable needs; the reusable scopes each job down from
-there. Copy the stubs and pin `@v4`; the toolkit scripts are checked out from
+there. Copy the stubs and keep the commit SHA pin; the toolkit scripts are checked out from
 the reusable workflow's own commit (`job.workflow_repository` /
 `job.workflow_sha`), so the `uses:` ref is the single version pin.
 
@@ -223,7 +228,7 @@ otherwise. The layered checks:
 - **Durable recovery branch** `release-run/<version>` - pins the exact release SHA
   so a failed or re-run release recovers to the same commit; deleted only after a
   verified publish.
-- **Attestation + post-publish verification** - `attest-build-provenance` signs the
+- **Attestation + post-publish verification** - `actions/attest` signs the
   assets; publish runs `gh attestation verify` against the exact source digest, then
   downloads every remote asset and re-hashes it. Blocks tampered or swapped assets.
 
@@ -321,7 +326,7 @@ workflow state.
    `package-manager`, `release-policy`, `default-branch`, `node-version`,
    `release-bot-app-slug`, `release-assets` (add `styles.css` if the plugin
    ships one), and `verify-commands` to match the repo's scripts.
-   - **One pin:** the `uses: ...@v4` ref selects this repo's version for the
+   - **One pin:** the `uses: ...@<sha>` ref selects this repo's version for the
      workflow AND its toolkit scripts (checked out from the reusable workflow's
      own commit), so Dependabot SHA bumps are always self-consistent.
    - **If the default branch is not `master`,** the literal appears in **five
@@ -339,28 +344,26 @@ workflow state.
 
 ## Pinned action versions
 
-Every third-party action is SHA-pinned with a version comment. These SHAs are
-kept fresh by Dependabot in the source repos and reused here verbatim:
+Every third-party action is SHA-pinned with a version comment. This repo's
+Dependabot config keeps them fresh and holds back releases younger than 7 days:
 
 | Action | Version | SHA |
 | --- | --- | --- |
-| `step-security/harden-runner` | v2.19.4 | `9af89fc71515a100421586dfdb3dc9c984fbf411` |
-| `actions/checkout` | v7.0.0 | `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` |
-| `pnpm/action-setup` | v6.0.9 | `0ebf47130e4866e96fce0953f49152a61190b271` |
-| `actions/setup-node` | v6.4.0 | `48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e` |
-| `github/codeql-action/*` | v4 | `54f647b7e1bb85c95cddabcd46b0c578ec92bc1a` |
+| `step-security/harden-runner` | v2.22.1 | `ccd8616d44fd3846e67624a50d5aad6d37bf2d25` |
+| `actions/checkout` | v7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
+| `pnpm/action-setup` | v6.1.0 | `ea17c68df8912ef543352723c149a84f56e3d413` |
+| `actions/setup-node` | v7.1.0 | `949feb2413d6458794dcd2491c4babbbce0c15c1` |
+| `github/codeql-action/*` | v4.39.0 | `6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee` |
 | `actions/dependency-review-action` | v5.0.0 | `a1d282b36b6f3519aa1f3fc636f609c47dddb294` |
-| `amannn/action-semantic-pull-request` | v6.1.1 | `48f256284bd46cdaab1048c3721360e808335d50` |
-| `actions/github-script` | v8.0.0 | `ed597411d8f924073f98dfc5c65a23a2325f34cd` |
-| `actions/create-github-app-token` | v3.2.0 | `bcd2ba49218906704ab6c1aa796996da409d3eb1` |
-| `actions/upload-artifact` | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` |
-| `actions/download-artifact` | v8.0.1 | `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` |
-| `actions/attest-build-provenance` | v4.1.1 | `0f67c3f4856b2e3261c31976d6725780e5e4c373` |
-| `actions/setup-python` | v6.3.0 | `ece7cb06caefa5fff74198d8649806c4678c61a1` |
-| `rtCamp/action-slack-notify` | v2.4.0 | `33ca3be66c6f378fe1610fd1d5258632dbed5e58` |
+| `actions/github-script` | v9.0.0 | `3a2844b7e9c422d3c10d287c895573f7108da1b3` |
+| `actions/create-github-app-token` | v3.3.0 | `64ab729a6294000f5aa4a4bc0b73d1f32bc45510` |
+| `actions/upload-artifact` | v7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
+| `actions/download-artifact` | v8.0.2 | `9000827ccba6bdab643e8b6fd33ac0654aef8333` |
+| `actions/attest` | v4.2.2 | `1e69f48acb82d1966a394da916b4c1698aa569d6` |
+| `actions/setup-python` | v7.0.0 | `5fda3b95a4ea91299a34e894583c3862153e4b97` |
 
 Add this repo's `github-actions` ecosystem to each consumer's Dependabot so the
-`@v1`/`@v4`/SHA pins here get bumped like any other action.
+SHA pins on this repo's workflows get bumped like any other action.
 
 ## Templates
 
@@ -371,21 +374,22 @@ per-file guide in [`templates/README.md`](./templates/README.md):
   `npm version` / `pnpm version` bump (the shared pipeline does this itself).
 - `semantic-release.jsonc` - legacy semantic-release plugin chain, kept for repos
   not yet on the shared release pipeline.
-- `dependabot.yml` - grouped weekly npm + github-actions updates.
+- `dependabot.yml` - grouped weekly npm + github-actions updates with a 7-day
+  cooldown.
 - `caller-workflows/` - minimal stubs consuming the reusable workflows, including
   the three release-pipeline stubs (`release-prepare.yml`, `release-trigger.yml`,
   `release.yml`).
 
 ## Versioning of this repo
 
-Consumers pin a ref, so this repo carries a moving major tag.
+Consumers pin a commit SHA with a version comment, so every release needs an
+immutable semver tag for that comment and for Dependabot to compare against.
 
-- Tag releases `v1.0.0`, `v1.1.0`, ... and keep a `v1` tag pointed at the latest
-  compatible release. Consumers pin `@v1`.
-- Move `v1` forward on any backwards-compatible change:
-  `git tag -f v1 v1.2.0 && git push -f origin v1`.
-- Cut `v2` only for a breaking change to a workflow's input surface or behavior.
-  Leave `v1` in place so unmigrated consumers keep working, then migrate them.
+- Tag each release `v4.1.0`, `v4.2.0`, ... and never move or delete those tags.
+- Keep the major tag (`v4`) pointed at the latest compatible release for anyone
+  still on tag pins: `git tag -f v4 v4.2.0 && git push -f origin v4`.
+- Cut `v5` only for a breaking change to a workflow's input surface or behavior.
+  Leave `v4` in place so unmigrated consumers keep working, then migrate them.
 
 ## Migration checklist (CI and quality workflows)
 
@@ -400,7 +404,7 @@ Consumers pin a ref, so this repo carries a moving major tag.
    `"release"` block matches `templates/semantic-release.jsonc` (adjust the
    lockfile asset and `styles.css` presence).
 4. Align `.github/dependabot.yml` with `templates/dependabot.yml`, and add a
-   `github-actions` entry so the new `@v1` pins get updated.
+   `github-actions` entry so the SHA pins get updated.
 5. Open a PR. Verify all four checks run and that required-check names still match
    your branch protection (the job names are `Test`, `Build + Lint`,
    `Analyze (...)`, `Dependency Review`, `Validate PR title`).

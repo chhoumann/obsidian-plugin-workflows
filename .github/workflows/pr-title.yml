@@ -6,10 +6,10 @@ name: PR Title
 # the PR title. Validating it as a Conventional Commit means a bad title can't
 # produce a wrong (or missing) release.
 #
-# The caller MUST trigger on `pull_request_target` (not `pull_request`): the
-# title of a fork PR is only reliably readable, and GITHUB_TOKEN only carries the
-# needed context, under pull_request_target. This workflow never checks out or
-# runs PR head code, so pull_request_target is safe here. See
+# The caller MUST trigger on `pull_request_target` (not `pull_request`): it runs
+# the base branch's workflow definition, so a PR cannot edit away its own title
+# check. This workflow never checks out or runs PR head code and only reads the
+# PR, so pull_request_target is safe here. See
 # templates/caller-workflows/pr-title.yml.
 
 on:
@@ -48,12 +48,23 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Harden Runner
-              uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+              uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
               with:
                   egress-policy: audit
             - name: Lint PR title
-              uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              with:
-                  types: ${{ inputs.types }}
+                  GH_TOKEN: ${{ github.token }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+                  REPOSITORY: ${{ github.repository }}
+                  TYPES: ${{ inputs.types }}
+              run: |
+                  # A rerun replays the original event payload, so read the live title.
+                  PR_TITLE="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .title)"
+                  # The conventionalcommits preset's header grammar: type(scope)!: subject.
+                  types="$(printf '%s\n' "$TYPES" | tr ',' '\n' | tr -d '[:blank:]' | sed '/^$/d' | paste -sd '|')"
+                  pattern="^(${types})(\(.*\))?!?: .+$"
+                  if [[ ! "$PR_TITLE" =~ $pattern ]]; then
+                      echo "::error title=Invalid PR title::The PR title is not a Conventional Commit header (<type>[(scope)][!]: <subject>). Allowed types: ${types//|/, }"
+                      exit 1
+                  fi
+                  echo "PR title is a valid Conventional Commit header."

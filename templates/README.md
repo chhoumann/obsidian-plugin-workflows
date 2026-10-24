@@ -51,13 +51,15 @@ the load-bearing ones:
 
 Grouped weekly updates for GitHub Actions and npm dependencies. Place at
 `.github/dependabot.yml`. Commit prefixes (`ci` for Actions, `build` for package
-deps) match the Conventional Commit types the release toolkit expects. Add extra
+deps) match the Conventional Commit types the release toolkit expects. A 7-day
+`cooldown` keeps brand-new releases out of version-update PRs; security updates
+are not delayed. Add extra
 `package-ecosystem` entries (e.g. a `docs/` subproject) as your repo needs.
 
 ## `caller-workflows/`
 
 Minimal stubs that consume the reusable workflows in this repo. Copy each into
-your repo's `.github/workflows/` and pin `@v1`/`@v4` (or a commit SHA). They
+your repo's `.github/workflows/` and keep the full commit SHA pin. They
 encode the triggers that CANNOT live in the reusable workflow.
 
 CI and quality:

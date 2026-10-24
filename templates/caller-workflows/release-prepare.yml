@@ -12,7 +12,7 @@
 name: Prepare release
 
 on:
-    workflow_run:
+    workflow_run: # zizmor: ignore[dangerous-triggers] gated to push runs on the default branch head
         # Must match the name: of your CI workflow (the shared ci.yml is "CI").
         workflows: ["CI"]
         types: [completed]
@@ -41,7 +41,7 @@ jobs:
         permissions:
             contents: write
             pull-requests: write
-        uses: chhoumann/obsidian-plugin-workflows/.github/workflows/release-prepare.yml@v4
+        uses: chhoumann/obsidian-plugin-workflows/.github/workflows/release-prepare.yml@ebcf84b80dc48ba15e0eec1f3575d41519a78ed5 # v4
         with:
             plugin-name: podnotes
             package-manager: npm

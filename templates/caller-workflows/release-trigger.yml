@@ -10,7 +10,7 @@
 name: Trigger release
 
 on:
-    pull_request_target:
+    pull_request_target: # zizmor: ignore[dangerous-triggers] checks out only the pinned toolkit
         types: [closed]
     # Recovery path: re-validate an already-merged release PR (e.g. after a
     # toolkit pin bump fixes a validation bug). The reusable workflow re-derives
@@ -41,7 +41,7 @@ jobs:
             actions: write
             contents: write
             pull-requests: read
-        uses: chhoumann/obsidian-plugin-workflows/.github/workflows/release-validate.yml@v4
+        uses: chhoumann/obsidian-plugin-workflows/.github/workflows/release-validate.yml@ebcf84b80dc48ba15e0eec1f3575d41519a78ed5 # v4
         with:
             pr-number: ${{ github.event.pull_request.number || inputs.pr-number }}
             plugin-name: podnotes

@@ -3,13 +3,12 @@ name: PR Title
 # Caller stub for the reusable PR-title workflow. Copy to
 # .github/workflows/pr-title.yml.
 #
-# MUST be pull_request_target: the title of a fork PR is only reliably readable,
-# and GITHUB_TOKEN only carries the right context, under this trigger. The
-# reusable workflow never checks out PR head code, so this is safe. The validated
-# title becomes the squash-merge commit, which drives the semantic-release
-# version.
+# MUST be pull_request_target: it runs the base branch's workflow definition, so
+# a PR cannot edit away its own title check. The reusable workflow never checks
+# out PR head code, so this is safe. The validated title becomes the
+# squash-merge commit, which drives the semantic-release version.
 on:
-    pull_request_target:
+    pull_request_target: # zizmor: ignore[dangerous-triggers] reads only the title; no checkout
         types: [opened, edited, synchronize, reopened]
 
 permissions:
@@ -17,7 +16,7 @@ permissions:
 
 jobs:
     pr-title:
-        uses: chhoumann/obsidian-plugin-workflows/.github/workflows/pr-title.yml@v1
+        uses: chhoumann/obsidian-plugin-workflows/.github/workflows/pr-title.yml@ebcf84b80dc48ba15e0eec1f3575d41519a78ed5 # v4
         permissions:
             pull-requests: read
         # with:

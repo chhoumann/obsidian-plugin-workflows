@@ -177,7 +177,7 @@ otherwise. Layered checks:
   exact release SHA so a failed/re-run release recovers to the same commit, and is
   deleted only after a verified publish.
 - **Attestation + post-publish verification** (attest/publish):
-  `actions/attest-build-provenance` signs the assets; publish runs
+  `actions/attest` signs the assets; publish runs
   `gh attestation verify` against the exact source digest and then downloads every
   remote asset and re-hashes it. Defends against tampered or swapped release
   assets.

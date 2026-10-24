@@ -1,0 +1,11 @@
+# The toolkit imports only the commit-analyzer and release-notes-generator
+# libraries. Their semantic-release peer is never loaded, so don't install it
+# (and its npm, GitHub, and HTTP client tree).
+autoInstallPeers: false
+peerDependencyRules:
+  ignoreMissing:
+    - semantic-release
+# Don't resolve versions published less than 7 days ago.
+minimumReleaseAge: 10080
+# Being a workspace root also keeps `pnpm --dir .release-toolkit install` from
+# resolving to a caller's own pnpm-workspace.yaml in the checkout above it.
